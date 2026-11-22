@@ -934,6 +934,8 @@ function openSettings(){
     <p class="note" style="margin:0">La clé reste sur ce téléphone. Les cryptos passent par CoinGecko, sans clé.</p>
     <h2 style="margin:8px 0 0">Dollar</h2>
     <label class="f" for="sFx">Valeur de 1 $ en euros ${s.fx?`(${s.fxManual?"saisie à la main":"mise à jour "+ago(s.fxAt)})`:""}<input id="sFx" type="number" inputmode="decimal" step="any" min="0" value="${s.fx||""}" placeholder="récupérée automatiquement"></label>
+    <h2 style="margin:8px 0 0">Verrouillage</h2>
+    <div id="lockZone"></div>
     <h2 style="margin:8px 0 0">Mes données</h2>
     <div class="actions"><button class="btn ghost" type="button" id="sExport">Sauvegarder (fichier)</button><label class="btn ghost" for="sImport" style="display:inline-flex">Restaurer<input id="sImport" type="file" accept=".json,application/json" hidden></label></div>
     <p class="note" style="margin:0">Tes données ne sont que sur ce téléphone. Une sauvegarde te permet de les retrouver si tu changes d'appareil ou si le navigateur efface ses données.</p>
@@ -944,6 +946,29 @@ function openSettings(){
   </form></div>`;
   const $=id=>document.getElementById(id);
   $("sCancel").onclick=closeSheet; $("sbg").addEventListener("click",e=>{ if(e.target.id==="sbg") closeSheet() });
+  const drawLock=async()=>{
+    const L=window.PatriLock; if(!L){ $("lockZone").innerHTML=`<p class="note" style="margin:0">Indisponible.</p>`; return }
+    const st=L.status();
+    if(st.on){
+      $("lockZone").innerHTML=`<p class="note" style="margin:0">Activé : ${st.faceId?"Face ID, avec ton code en secours":"code à 4 chiffres"}. L'appli se reverrouille après 1 minute en arrière-plan.</p>
+        <div class="actions"><button class="btn small ghost" type="button" id="lOff">Désactiver</button></div>`;
+      $("lOff").onclick=()=>{ L.disable(); drawLock(); toast("Verrouillage désactivé") };
+    } else {
+      const fid=await L.faceIdPossible();
+      $("lockZone").innerHTML=`<label class="f" for="lPin">Choisis un code à 4 chiffres (secours si Face ID échoue)<input id="lPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off"></label>
+        <div class="actions"><button class="btn small" type="button" id="lOn">${fid?"Activer Face ID":"Activer le code"}</button></div>
+        <p class="note" style="margin:0">${fid?"Ton iPhone te proposera peut-être d'enregistrer une clé d'identification (passkey) pour ce site : accepte-la, c'est elle qui permet Face ID.":"Face ID n'est pas disponible dans ce navigateur : seul le code sera utilisé."}</p>`;
+      $("lOn").onclick=async()=>{
+        const pin=$("lPin").value.trim();
+        if(!/^\d{4}$/.test(pin)){ $("sErr").textContent="Le code doit faire 4 chiffres."; $("sErr").hidden=false; return }
+        $("sErr").hidden=true;
+        const r=await L.enable(pin, fid);
+        toast(r.faceId?"Face ID activé":(fid?"Face ID refusé : verrouillage par code activé":"Verrouillage par code activé"));
+        drawLock();
+      };
+    }
+  };
+  drawLock();
   $("sExport").onclick=()=>{
     const blob=new Blob([JSON.stringify(state,null,1)],{type:"application/json"});
     const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`patrimoine-${new Date().toISOString().slice(0,10)}.json`; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove() },1000);
