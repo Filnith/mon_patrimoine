@@ -75,7 +75,7 @@ function cryptoAccountFor(accId){
 function fixCryptos(){
   let n=0; const from=new Set();
   // nom plus clair pour le compte robo-advisor de Revolut
-  state.accounts.forEach(a=>{ if(/revolut/i.test(a.inst) && a.name==="Investissement automatique"){ a.name="Investissement automatique (robo)"; n++ } });
+  state.accounts.forEach(a=>{ if(/revolut/i.test(a.inst) && /^Investissement automatique/.test(a.name)){ a.name="Robot advisor"; a.robo=true; n++ } });
   state.positions.forEach(p=>{
     if(p.cls!=="cry" && looksCrypto(p)){ p.cls="cry"; p.ccy="Crypto"; n++ }
     if(p.cls==="cry"){ if(!p.sym) p.sym=guessCoin(p.name)||undefined; const to=cryptoAccountFor(p.acc); if(to!==p.acc){ from.add(p.acc); p.acc=to; n++ } }
@@ -106,6 +106,26 @@ const val = p => num(p.qty)*num(p.price);
 function byClass(){ const m={}; state.positions.forEach(p=>{ m[p.cls]=(m[p.cls]||0)+val(p) }); return m }
 function byInst(){ const m={}; state.positions.forEach(p=>{ const a=state.accounts.find(a=>a.id===p.acc); const k=a?a.inst:"Autre"; m[k]=(m[k]||0)+val(p) }); return m }
 const accById = id => state.accounts.find(a=>a.id===id) || {inst:"Autre", name:"Compte", env:""};
+// Compte géré (robot advisor) : affiché comme un seul bloc, ses lignes restent en interne pour les cours et la répartition
+const isRobo = p => !!accById(p.acc).robo;
+function roboBlocks(){
+  return state.accounts.filter(a=>a.robo).map(a=>{
+    const ps=state.positions.filter(p=>p.acc===a.id); if(!ps.length) return null;
+    const mk=ps.filter(isMarket);
+    const v=ps.reduce((s,p)=>s+val(p),0), cost=mk.reduce((s,p)=>s+num(p.qty)*num(p.pru),0), mv=mk.reduce((s,p)=>s+val(p),0);
+    const withPrev=mk.filter(p=>p.prev&&sameDay(p.priceAt,Date.now()));
+    const d=withPrev.reduce((s,p)=>s+p.qty*(p.price-p.prev),0), base=withPrev.reduce((s,p)=>s+p.qty*p.prev,0);
+    // performance du panier, d'après les cours passés de chaque ligne
+    const ser=mk.map(p=>state.series[p.id]&&state.series[p.id].c).filter(c=>c&&c.length);
+    const perf=k=>{ const ok=mk.filter(p=>{const c=state.series[p.id]&&state.series[p.id].c; return c&&c.length>k*0.95});
+      if(ok.length<mk.length*0.8) return null;
+      let now=0,then=0; ok.forEach(p=>{const c=state.series[p.id].c; now+=p.qty*c[c.length-1]; then+=p.qty*c[Math.max(0,c.length-1-k)]}); return then?now/then-1:null };
+    return {a, ps, v, gain:mv-cost, gainPct:cost?(mv-cost)/cost:0, d:withPrev.length?d:null, dp:base?d/base:null, n:mk.length, perf1m:perf(21), perf1a:perf(250), hasSer:ser.length>0};
+  }).filter(Boolean);
+}
+function roboLine(b, extra){
+  return `<div class="line"><span class="name">Robot advisor · ${b.n} ETF</span><span class="val num">${eur0.format(b.v)}</span><span class="sub">${esc(b.a.inst)} · géré pour toi, détail masqué${extra||""}</span><span class="r num ${cl(b.dp)}">${b.dp==null?"":pct(b.dp)}</span></div>`;
+}
 // ---------- Historique réel : un relevé du total à chaque ouverture ou actualisation ----------
 function prevClose(p){ return isMarket(p) ? (p.prev||null) : p.price }
 function totals(){
@@ -202,7 +222,7 @@ function renderGlobal(){
   const first=state.snaps[0], histDays=first?(Date.now()-first.t)/86400000:0;
   const shortHist = R.k!=="1J" && histDays < R.days-0.5;
   const chg=enough?series[series.length-1]-series[0]:0, chgPct=enough&&series[0]?chg/series[0]:0;
-  const movers=state.positions.filter(p=>isMarket(p)&&p.prev&&sameDay(p.priceAt,Date.now())).map(p=>({p, d:p.qty*(p.price-p.prev), dp:(p.price-p.prev)/p.prev})).sort((a,b)=>Math.abs(b.d)-Math.abs(a.d)).slice(0,3);
+  const movers=state.positions.filter(p=>!isRobo(p)&&isMarket(p)&&p.prev&&sameDay(p.priceAt,Date.now())).map(p=>({p, d:p.qty*(p.price-p.prev), dp:(p.price-p.prev)/p.prev})).concat(roboBlocks().filter(b=>b.d!=null).map(b=>({p:{name:"Robot advisor",acc:b.a.id}, d:b.d, dp:b.dp}))).sort((a,b)=>Math.abs(b.d)-Math.abs(a.d)).slice(0,3);
   const instMax=Math.max(...Object.values(inst));
   return `
   ${state.positions.some(p=>p.fxMissing)?`<section class="panel point warn"><p style="margin:0">Certaines lignes sont en dollars et le taux dollar → euro n'est pas encore connu. Elles comptent pour 0 € en attendant. Touche ↻ en haut, ou indique le taux dans les réglages.</p></section>`:""}
@@ -252,16 +272,18 @@ function renderComptes(){
     return `<div class="inst">${esc(inst)}</div>`+accs.map(a=>{
       const ps=state.positions.filter(p=>p.acc===a.id); if(!ps.length) return "";
       const tot=ps.reduce((s,p)=>s+val(p),0);
-      return `<section class="panel"><div class="acc-head"><span><span class="t">${esc(a.name)}</span>${a.env?`<span class="env">${esc(a.env)}</span>`:""}</span><span class="num t">${eur0.format(tot)}</span></div><div class="list">${ps.map(posLine).join("")}</div></section>`;
+      const rb=a.robo&&roboBlocks().find(b=>b.a.id===a.id);
+      return `<section class="panel"><div class="acc-head"><span><span class="t">${esc(a.name)}</span>${a.env?`<span class="env">${esc(a.env)}</span>`:""}</span><span class="num t">${eur0.format(tot)}</span></div><div class="list">${rb?roboLine(rb):ps.map(posLine).join("")}</div></section>`;
     }).join("");
   }).join("");
 }
 function renderPositions(){
-  const ps=state.positions.slice().sort((a,b)=>val(b)-val(a));
-  if(!ps.length) return emptyState();
+  if(!state.positions.length) return emptyState();
+  const ps=state.positions.filter(p=>!isRobo(p)).sort((a,b)=>val(b)-val(a));
+  const rbs=roboBlocks();
   return `
   <div class="actions"><button class="btn" data-act="add">Ajouter une position</button><button class="btn ghost" data-act="import">Importer un fichier</button></div>
-  <section class="panel"><h2>Toutes les lignes</h2><div class="list">${ps.map(p=>{
+  <section class="panel"><h2>Toutes les lignes</h2><div class="list">${rbs.map(b=>roboLine(b,`<br>Plus-value latente <span class="num ${cl(b.gain)}">${money(b.gain)} (${pct(b.gainPct)})</span>`)).join("")}${ps.map(p=>{
     const a=accById(p.acc); const g=isMarket(p)?p.qty*(p.price-p.pru):0; const gp=isMarket(p)&&p.pru?(p.price-p.pru)/p.pru:0;
     const del = confirmDel===p.id
       ? `<span class="actions"><button class="btn small danger" data-del="${p.id}">Supprimer</button><button class="btn small ghost" data-cancel="1">Annuler</button></span>`
@@ -845,17 +867,29 @@ function signals(p, total){
 const fp = v => v==null ? "–" : pct(v);
 function renderConseils(){
   const t=totals();
-  const ps=state.positions.filter(isMarket).sort((a,b)=>val(b)-val(a));
-  if(!ps.length) return emptyState();
+  const ps=state.positions.filter(p=>isMarket(p)&&!isRobo(p)).sort((a,b)=>val(b)-val(a));
+  const rbs=roboBlocks();
+  if(!ps.length&&!rbs.length) return emptyState();
+  const allSeries=ps.every(p=>state.series[p.id]);
   const canLoad=ps.some(p=>p.sym && (p.cls==="cry" || (state.settings.provider!=="none"&&state.settings.key)));
   return `
-  <section class="panel">
+  ${allSeries?"":`<section class="panel">
     <h2>Cours passés des titres</h2>
     <p class="note" style="margin:0 0 10px">Tes relevés donnent tes achats et tes ventes, mais pas le cours de chaque titre jour après jour. Or la tendance, les moyennes et le RSI se calculent sur ces cours passés. L'appli doit donc les demander à une source de cours.</p>
     ${canLoad?`<button class="btn" data-act="load-hist">Charger les cours passés</button><p class="note" style="margin:8px 0 0">Une requête par titre. Il t'en reste ${Math.max(0,callsLeft())} aujourd'hui.</p>`
       :`<p class="note" style="margin:0">Pour les activer : crée une clé gratuite chez Alpha Vantage ou EODHD, colle-la dans les réglages (roue dentée), puis indique le symbole de chaque titre avec « Modifier ». En attendant, les conseils ci-dessous se basent sur tes plus-values et le poids de chaque ligne.</p>`}
-  </section>
-  <h2 style="margin:4px 0 -6px">Signaux par ligne</h2>
+  </section>`}
+  ${rbs.map(b=>`<section class="panel">
+    <div class="row-head" style="margin-bottom:2px"><strong>Robot advisor · ${b.n} ETF</strong></div>
+    <span class="note">${esc(b.a.inst)} · ${pctF.format(t.total?b.v/t.total:0)} du patrimoine · ${eur0.format(b.v)}</span>
+    <div class="sig">
+      <div>Plus-value<b class="${cl(b.gain)}">${pct(b.gainPct)}</b></div>
+      <div>1 mois<b class="${cl(b.perf1m)}">${fp(b.perf1m)}</b></div>
+      <div>1 an<b class="${cl(b.perf1a)}">${fp(b.perf1a)}</b></div>
+    </div>
+    <p class="note" style="margin:6px 0 0">Ce portefeuille est géré par ${esc(b.a.inst)} : pas de signal ligne par ligne, puisque tu ne choisis pas les titres. Il compte quand même dans la répartition et le risque.</p>
+  </section>`).join("")}
+  ${ps.length?`<h2 style="margin:4px 0 -6px">Signaux par ligne</h2>`:""}
   ${ps.map(p=>{ const s=signals(p,t.total); return `<section class="panel">
     <div class="row-head" style="margin-bottom:2px"><strong>${esc(p.name)}</strong>${s.trend?`<span class="tag ${s.trend.c}">${s.trend.t}</span>`:""}</div>
     <span class="note">${esc(accById(p.acc).inst)} · ${esc(accById(p.acc).name)} · ${pctF.format(s.w)} du patrimoine${state.series[p.id]?` · historique du ${fmtDate(state.series[p.id].at)}`:""}</span>
