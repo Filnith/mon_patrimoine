@@ -1,6 +1,6 @@
 // Garde l'appli disponible hors connexion. Les appels aux sources de cours ne sont jamais mis en cache.
-const CACHE = "patrimoine-v11";
-const FILES = ["./", "index.html", "app.js?v=11", "styles.css?v=11", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-180.png"];
+const CACHE = "patrimoine-v12";
+const FILES = ["./", "index.html", "app.js?v=12", "styles.css?v=12", "manifest.webmanifest", "icon-192.png", "icon-512.png", "icon-180.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); self.skipWaiting() });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k))))); self.clients.claim() });
 self.addEventListener("fetch", e => {

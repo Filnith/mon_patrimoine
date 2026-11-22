@@ -123,8 +123,11 @@ function roboBlocks(){
     return {a, ps, v, gain:mv-cost, gainPct:cost?(mv-cost)/cost:0, d:withPrev.length?d:null, dp:base?d/base:null, n:mk.length, perf1m:perf(21), perf1a:perf(250), hasSer:ser.length>0};
   }).filter(Boolean);
 }
+const roboOpen=new Set();
 function roboLine(b, extra){
-  return `<div class="line"><span class="name">Robot advisor · ${b.n} ETF</span><span class="val num">${eur0.format(b.v)}</span><span class="sub">${esc(b.a.inst)} · géré pour toi, détail masqué${extra||""}</span><span class="r num ${cl(b.dp)}">${b.dp==null?"":pct(b.dp)}</span></div>`;
+  const open=roboOpen.has(b.a.id);
+  return `<button class="line robo-toggle" data-robo="${b.a.id}" aria-expanded="${open}" style="width:100%;text-align:left;background:none;border-width:1px 0 0;font:inherit;color:inherit;cursor:pointer"><span class="name">${open?"▾":"▸"} Robot advisor · ${b.n} ETF</span><span class="val num">${eur0.format(b.v)}</span><span class="sub">${esc(b.a.inst)} · géré pour toi · ${open?"touche pour replier":"touche pour voir le détail"}${extra||""}</span><span class="r num ${cl(b.dp)}">${b.dp==null?"":pct(b.dp)}</span></button>
+  ${open?`<div style="padding-left:12px;border-left:2px solid var(--line)">${b.ps.slice().sort((x,y)=>val(y)-val(x)).map(posLine).join("")}</div>`:""}`;
 }
 // ---------- Historique réel : un relevé du total à chaque ouverture ou actualisation ----------
 function prevClose(p){ return isMarket(p) ? (p.prev||null) : p.price }
@@ -888,6 +891,7 @@ function renderConseils(){
       <div>1 an<b class="${cl(b.perf1a)}">${fp(b.perf1a)}</b></div>
     </div>
     <p class="note" style="margin:6px 0 0">Ce portefeuille est géré par ${esc(b.a.inst)} : pas de signal ligne par ligne, puisque tu ne choisis pas les titres. Il compte quand même dans la répartition et le risque.</p>
+    <div class="list" style="margin-top:8px">${roboLine(b)}</div>
   </section>`).join("")}
   ${ps.length?`<h2 style="margin:4px 0 -6px">Signaux par ligne</h2>`:""}
   ${ps.map(p=>{ const s=signals(p,t.total); return `<section class="panel">
@@ -973,6 +977,7 @@ document.getElementById("refreshBtn").onclick=()=>refreshPrices(true);
 view.addEventListener("click",e=>{
   const t=e.target.closest("button"); if(!t) return;
   const a=t.dataset.act;
+  if(t.dataset.robo){ const id=t.dataset.robo; roboOpen.has(id)?roboOpen.delete(id):roboOpen.add(id); render(); return }
   if(t.dataset.range){ range=t.dataset.range; render() }
   else if(a==="add") openSheet();
   else if(a==="import") openImport();
