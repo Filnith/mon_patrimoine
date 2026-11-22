@@ -74,6 +74,8 @@ function cryptoAccountFor(accId){
 }
 function fixCryptos(){
   let n=0; const from=new Set();
+  // nom plus clair pour le compte robo-advisor de Revolut
+  state.accounts.forEach(a=>{ if(/revolut/i.test(a.inst) && a.name==="Investissement automatique"){ a.name="Investissement automatique (robo)"; n++ } });
   state.positions.forEach(p=>{
     if(p.cls!=="cry" && looksCrypto(p)){ p.cls="cry"; p.ccy="Crypto"; n++ }
     if(p.cls==="cry"){ if(!p.sym) p.sym=guessCoin(p.name)||undefined; const to=cryptoAccountFor(p.acc); if(to!==p.acc){ from.add(p.acc); p.acc=to; n++ } }
@@ -234,7 +236,7 @@ function renderGlobal(){
   </section>
   ${movers.length?`<section class="panel">
     <h2>Plus gros mouvements du jour</h2>
-    <div class="list">${movers.map(o=>`<div class="line"><span class="name">${esc(o.p.name)}</span><span class="val num ${cl(o.d)}">${money(o.d)}</span><span class="sub">${esc(accById(o.p.acc).inst)} · ${esc(accById(o.p.acc).env)}</span><span class="r num ${cl(o.dp)}">${pct(o.dp)}</span></div>`).join("")}</div>
+    <div class="list">${movers.map(o=>`<div class="line"><span class="name">${esc(o.p.name)}</span><span class="val num ${cl(o.d)}">${money(o.d)}</span><span class="sub">${esc(accById(o.p.acc).inst)} · ${esc(accById(o.p.acc).name)}</span><span class="r num ${cl(o.dp)}">${pct(o.dp)}</span></div>`).join("")}</div>
   </section>`:""}`;
 }
 
@@ -856,7 +858,7 @@ function renderConseils(){
   <h2 style="margin:4px 0 -6px">Signaux par ligne</h2>
   ${ps.map(p=>{ const s=signals(p,t.total); return `<section class="panel">
     <div class="row-head" style="margin-bottom:2px"><strong>${esc(p.name)}</strong>${s.trend?`<span class="tag ${s.trend.c}">${s.trend.t}</span>`:""}</div>
-    <span class="note">${esc(accById(p.acc).inst)} · ${esc(accById(p.acc).env)} · ${pctF.format(s.w)} du patrimoine${state.series[p.id]?` · historique du ${fmtDate(state.series[p.id].at)}`:""}</span>
+    <span class="note">${esc(accById(p.acc).inst)} · ${esc(accById(p.acc).name)} · ${pctF.format(s.w)} du patrimoine${state.series[p.id]?` · historique du ${fmtDate(state.series[p.id].at)}`:""}</span>
     ${s.n>=20?`<div class="sig">
       <div>1 mois<b class="${cl(s.perf1m)}">${fp(s.perf1m)}</b></div>
       <div>1 an<b class="${cl(s.perf1a)}">${fp(s.perf1a)}</b></div>
