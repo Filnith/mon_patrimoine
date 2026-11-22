@@ -154,7 +154,7 @@ function emptyState(){
   return `<section class="panel empty">
     <h2 style="margin:0">Bienvenue</h2>
     <p style="margin:0">Ajoute tes comptes et tes placements pour voir ton patrimoine ici. Tout reste sur ce téléphone.</p>
-    <div class="actions"><button class="btn" data-act="add">Ajouter une position</button><button class="btn ghost" data-act="import">Importer un CSV</button></div>
+    <div class="actions"><button class="btn" data-act="add">Ajouter une position</button><button class="btn ghost" data-act="import">Importer un fichier</button></div>
     <p class="note" style="margin:0">Tu veux d'abord voir à quoi ça ressemble ? <button class="btn small ghost" data-act="example">Charger un exemple</button></p>
   </section>`;
 }
@@ -221,7 +221,7 @@ function renderPositions(){
   const ps=state.positions.slice().sort((a,b)=>val(b)-val(a));
   if(!ps.length) return emptyState();
   return `
-  <div class="actions"><button class="btn" data-act="add">Ajouter une position</button><button class="btn ghost" data-act="import">Importer un CSV</button></div>
+  <div class="actions"><button class="btn" data-act="add">Ajouter une position</button><button class="btn ghost" data-act="import">Importer un fichier</button></div>
   <section class="panel"><h2>Toutes les lignes</h2><div class="list">${ps.map(p=>{
     const a=accById(p.acc); const g=isMarket(p)?p.qty*(p.price-p.pru):0; const gp=isMarket(p)&&p.pru?(p.price-p.pru)/p.pru:0;
     const del = confirmDel===p.id
@@ -500,8 +500,25 @@ function lineNumbers(t){
   t=t.replace(ISIN_RE," ").replace(/\b\d{1,2}[\/.]\d{1,2}[\/.]\d{2,4}\b/g," ").replace(/\b\d{4}-\d{2}-\d{2}\b/g," ");
   return (t.match(NUM_RE)||[]).map(x=>x.replace("−","-"));
 }
+// Relevé de compte Revolut : on lit le dernier tableau « Résumé du solde » (solde de clôture de chaque produit)
+function parseRevolutBalances(lines){
+  const txt=lines.map(l=>l.replace(/[ \t\u00a0\u202f]+/g," ").trim()).join("\n");
+  if(!/Revolut/i.test(txt) || !/Résumé du solde/i.test(txt)) return null;
+  const start=txt.lastIndexOf("Résumé du solde");
+  const end=txt.indexOf("Total",start);
+  if(end<0) return null;
+  let block=txt.slice(start,end).replace(/Résumé du solde|Produit|Solde d'ouverture|Argent sortant|Argent entrant|Solde de|clôture|Lieu d[’']émission de vos transactions/g," ").replace(/\s+/g," ");
+  const AMT="(-?\\d[\\d \\u00a0\\u202f]*,\\d{2}) ?€";
+  const re=new RegExp("([A-Za-zÀ-ÿ()'’ -]+?)\\s+"+AMT+"\\s+"+AMT+"\\s+"+AMT+"\\s+"+AMT,"g");
+  const out=[]; let m;
+  while((m=re.exec(block))) out.push({name:m[1].trim(), balance:parseNum(m[5])});
+  const gen=(txt.match(/Généré le ([^\n]+)/)||[])[1]||"";
+  return out.length?{products:out, date:gen.trim()}:null;
+}
 async function readPdfRows(file){
   const lines=await pdfLines(file), rows=[];
+  const rv=parseRevolutBalances(lines);
+  if(rv) return {revolut:rv, header:[], rows:[]};
   for(let i=0;i<lines.length;i++){
     const m=lines[i].match(ISIN_RE); if(!m) continue;
     // la ligne de l'ISIN, plus les lignes suivantes jusqu'au prochain ISIN (au plus 2), car certains relevés coupent une position sur plusieurs lignes
@@ -517,7 +534,7 @@ async function readPdfRows(file){
   return {header, rows:rows.map(r=>r.concat(Array(width-r.length).fill("")))};
 }
 function openImport(){
-  let data=null, kind="transactions", map={};
+  let data=null, kind="transactions", map={}, cash=null;
   sheetRoot.innerHTML=`<div class="sheet-bg" id="sbg"><form class="sheet" id="iform" novalidate>
     <h3>Importer un fichier (CSV ou PDF)</h3>
     <p class="note" style="margin:0">Le fichier est lu dans ton navigateur. Il n'est envoyé nulle part.</p>
@@ -554,11 +571,19 @@ function openImport(){
       ${IMPORT_FIELDS[kind].map(f=>`<label class="f" for="m_${f.k}">${f.label}<select id="m_${f.k}" data-map="${f.k}"><option value="-1">(aucune)</option>${data.header.map((h,i)=>`<option value="${i}" ${map[f.k]===i?"selected":""}>${esc(h||"Colonne "+(i+1))}${data.rows[0]&&data.rows[0][i]?` · ex. ${esc(String(data.rows[0][i]).slice(0,24))}`:""}</option>`).join("")}</select></label>`).join("")}</div>`;
   };
   const refresh=()=>{ drawMap(); drawPreview() };
+  const drawCash=()=>{
+    $("iPrev").innerHTML=`<div class="panel" style="padding:12px"><h2>Relevé Revolut : soldes de clôture</h2>
+      <div class="list">${cash.products.map(p=>`<div class="line"><span class="name">${esc(p.name)}</span><span class="val num">${eur2.format(p.balance)}</span></div>`).join("")}</div>
+      <p class="note">${cash.date?`Relevé généré le ${esc(cash.date)}. `:""}Ces soldes seront ajoutés comme liquidités. Ils ne tiennent pas compte des opérations en attente.</p></div>`;
+    $("iKind").closest("label").hidden=true; $("iCls").closest("label").hidden=true;
+  };
   $("iFile").addEventListener("change",e=>{
     const f=e.target.files[0]; if(!f) return; err("");
     if(/\.pdf$/i.test(f.name) || f.type==="application/pdf"){
       $("iPrev").innerHTML=`<p class="note">Lecture du PDF…</p>`;
       readPdfRows(f).then(d=>{
+        if(d.revolut){ cash=d.revolut; data=null; $("iMap").innerHTML=""; drawCash(); return }
+        cash=null;
         if(!d.rows.length) throw new Error("vide");
         data=d; kind="positions"; $("iKind").value="positions";
         map={name:0, isin:1, qty:d.header.length>2?2:-1, pru:d.header.length>3?3:-1, price:d.header.length>4?4:-1};
@@ -583,6 +608,13 @@ function openImport(){
   $("iCancel").onclick=closeSheet; $("sbg").addEventListener("click",e=>{ if(e.target.id==="sbg") closeSheet() });
   $("iform").addEventListener("submit",e=>{
     e.preventDefault();
+    if(cash){
+      let acc=$("iAcc").value;
+      if(acc==="__new"){ const inst=$("iInst").value.trim()||"Revolut"; acc="a"+Date.now(); state.accounts.push({id:acc,inst,name:"Compte",env:"Compte"}) }
+      if($("iMode").value==="replace") state.positions=state.positions.filter(p=>!(p.acc===acc && !isMarket(p)));
+      cash.products.filter(p=>p.balance!==0).forEach((p,i)=>state.positions.push({id:"p"+Date.now()+"_"+i, acc, name:p.name, cls:"liq", qty:1, pru:p.balance, price:p.balance, ccy:"EUR", priceAt:Date.now(), src:"fichier"}));
+      snapshot(); save(); closeSheet(); render(); toast("Soldes Revolut importés"); return;
+    }
     if(!data) return err("Choisis d'abord un fichier.");
     const missing=IMPORT_FIELDS[kind].filter(f=>f.req && map[f.k]<0).map(f=>f.label);
     if(missing.length) return err("Indique la colonne pour : "+missing.join(", ")+".");
