@@ -1,7 +1,7 @@
 """Récupère chaque jour les cours des titres listés dans titres.txt (un ISIN ou un symbole par ligne)
 et les écrit dans cours.json, que l'appli lit. Aucune donnée personnelle : seulement des cours de marché.
 Source : Yahoo Finance (non officielle, sans clé)."""
-import json, time, urllib.request, urllib.parse, datetime, sys
+import json, os, time, urllib.request, urllib.parse, datetime, sys
 
 UA = {"User-Agent": "Mozilla/5.0 (compatible; mon-patrimoine/1.0)"}
 PREF = [".PA", ".DE", ".AS", ".MI", ".F", ".BR", ".MC", ""]  # places européennes d'abord, puis US
@@ -24,8 +24,8 @@ def resolve(code):
                 out.append(s)
     return out + [s for s in syms if s not in out]
 
-def chart(sym):
-    j = get(f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(sym)}?range=1y&interval=1d")
+def chart(sym, rng="1y"):
+    j = get(f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(sym)}?range={rng}&interval=1d")
     r = j["chart"]["result"][0]
     meta, ts = r["meta"], r.get("timestamp", [])
     closes = r["indicators"]["quote"][0]["close"]
@@ -41,7 +41,29 @@ def main():
         out["fx"]["USDEUR"] = round(1 / chart("EURUSD=X")["price"], 6)
     except Exception as e:
         out["errors"]["USDEUR"] = str(e)
+    # Passage léger (en journée) : seulement les derniers jours, fusionnés avec l'historique déjà publié
+    light = os.environ.get("LEGER") == "1"
+    old = {}
+    if light:
+        try:
+            old = json.load(open("cours.json", encoding="utf-8")).get("titres", {})
+        except Exception:
+            old = {}
     for c in codes:
+        if c in old:
+            try:
+                q = chart(old[c]["symbol"], "5d")
+                if not q["price"]:
+                    raise ValueError("pas de cours")
+                hist = dict(map(tuple, old[c].get("closes", [])))
+                hist.update(dict(map(tuple, q["closes"])))
+                q["closes"] = [list(x) for x in sorted(hist.items())][-260:]
+                out["titres"][c] = q
+            except Exception as e:
+                out["titres"][c] = old[c]  # on garde le dernier cours connu
+                out["errors"][c] = "cours du jour non mis à jour : " + str(e)
+            time.sleep(1)
+            continue
         try:
             cands = resolve(c)
             if not cands:

@@ -1,23 +1,34 @@
 name: Cours du jour
 on:
   schedule:
-    - cron: "30 17 * * 1-5"   # chaque jour de semaine vers 18h30 (heure de Paris en hiver)
-    - cron: "0 22 * * 1-5"    # et après la clôture américaine
+    # Horaires en UTC. Heure de Paris = UTC + 1 en hiver, UTC + 2 en été.
+    - cron: "35 7-20 * * 1-5"   # chaque heure de semaine (passage léger : cours du jour)
+    - cron: "15 22 * * 1-5"     # après la clôture américaine (passage complet : un an d'historique)
   workflow_dispatch: {}
 permissions:
   contents: write
+concurrency:
+  group: cours
+  cancel-in-progress: false
 jobs:
   cours:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python scripts/fetch_prices.py
+      - name: Récupérer les cours
+        run: python scripts/fetch_prices.py
+        env:
+          LEGER: ${{ github.event_name == 'schedule' && github.event.schedule == '35 7-20 * * 1-5' && '1' || '0' }}
       - name: Enregistrer cours.json
         run: |
           git config user.name "cours-bot"
           git config user.email "cours-bot@users.noreply.github.com"
           git add cours.json
-          git diff --cached --quiet || (git commit -m "Cours du jour" && git push)
+          git diff --cached --quiet && exit 0
+          git commit -m "Cours du jour"
+          git pull --rebase -X theirs origin main || true
+          git push
