@@ -46,10 +46,11 @@ function load(){
 state = load();
 // Lignes cotées en dollars (pruUsd, priceUsd) : converties en euros avec le taux des réglages
 function applyFx(){
-  const fx=state.settings.fx;
+  const fx=parseFloat(state.settings.fx);
   state.positions.forEach(p=>{
+    ["qty","pru","price","pruUsd","priceUsd"].forEach(k=>{ if(typeof p[k]==="string") p[k]=parseFloat(String(p[k]).replace(",",".")) });
     if(p.pruUsd==null && p.priceUsd==null) return;
-    if(!fx){ p.fxMissing=true; if(p.pru==null) p.pru=0; if(p.price==null) p.price=0; return }
+    if(!(fx>0)){ p.fxMissing=true; if(!isFinite(p.pru)) p.pru=0; if(!isFinite(p.price)) p.price=0; return }
     p.fxMissing=false;
     if(p.pruUsd!=null) p.pru=p.pruUsd*fx;
     if(p.priceUsd!=null && p.src!=="auto") p.price=p.priceUsd*fx;
@@ -79,7 +80,8 @@ const pct = v => sign(v)+pctF.format(Math.abs(v));
 const cl = v => v>0?"up":v<0?"down":"";
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const isMarket = p => CLASSES[p.cls] && CLASSES[p.cls].vol > 0;
-const val = p => p.qty*p.price;
+const num = v => (typeof v==="number" && isFinite(v)) ? v : 0;
+const val = p => num(p.qty)*num(p.price);
 function byClass(){ const m={}; state.positions.forEach(p=>{ m[p.cls]=(m[p.cls]||0)+val(p) }); return m }
 function byInst(){ const m={}; state.positions.forEach(p=>{ const a=state.accounts.find(a=>a.id===p.acc); const k=a?a.inst:"Autre"; m[k]=(m[k]||0)+val(p) }); return m }
 const accById = id => state.accounts.find(a=>a.id===id) || {inst:"Autre", name:"Compte", env:""};
@@ -89,7 +91,7 @@ function totals(){
   let total=0, prev=0, dayKnown=false, gain=0, cost=0;
   state.positions.forEach(p=>{
     total+=val(p);
-    if(isMarket(p)){ gain+=p.qty*(p.price-p.pru); cost+=p.qty*p.pru;
+    if(isMarket(p)){ gain+=num(p.qty)*(num(p.price)-num(p.pru)); cost+=num(p.qty)*num(p.pru);
       if(p.prev && p.priceAt && sameDay(p.priceAt,Date.now())){ prev+=p.qty*p.prev; dayKnown=true } else prev+=val(p) }
     else prev+=val(p);
   });
