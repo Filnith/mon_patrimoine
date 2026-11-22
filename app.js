@@ -44,6 +44,18 @@ function load(){
   return s;
 }
 state = load();
+// Lignes cotées en dollars (pruUsd, priceUsd) : converties en euros avec le taux des réglages
+function applyFx(){
+  const fx=state.settings.fx;
+  state.positions.forEach(p=>{
+    if(p.pruUsd==null && p.priceUsd==null) return;
+    if(!fx){ p.fxMissing=true; if(p.pru==null) p.pru=0; if(p.price==null) p.price=0; return }
+    p.fxMissing=false;
+    if(p.pruUsd!=null) p.pru=p.pruUsd*fx;
+    if(p.priceUsd!=null && p.src!=="auto") p.price=p.priceUsd*fx;
+  });
+}
+applyFx();
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(state)) } catch(e){ toast("Impossible d'enregistrer sur cet appareil (stockage plein ou bloqué).") } }
 function loadExample(){
   state = Object.assign(DEFAULT(), {accounts:clone(EXAMPLE.accounts), positions:clone(EXAMPLE.positions), isExample:true, settings:state.settings});
@@ -168,6 +180,7 @@ function renderGlobal(){
   const movers=state.positions.filter(p=>isMarket(p)&&p.prev&&sameDay(p.priceAt,Date.now())).map(p=>({p, d:p.qty*(p.price-p.prev), dp:(p.price-p.prev)/p.prev})).sort((a,b)=>Math.abs(b.d)-Math.abs(a.d)).slice(0,3);
   const instMax=Math.max(...Object.values(inst));
   return `
+  ${state.positions.some(p=>p.fxMissing)?`<section class="panel point warn"><p style="margin:0">Certaines lignes sont en dollars et le taux dollar → euro n'est pas encore connu. Elles comptent pour 0 € en attendant. Touche ↻ en haut, ou indique le taux dans les réglages.</p></section>`:""}
   ${state.isExample?`<section class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><span class="note">Tu regardes des <b>données d'exemple</b>.</span><button class="btn small" data-act="clear-example">Effacer et commencer</button></section>`:""}
   <section class="hero">
     <span class="label">Patrimoine total</span>
@@ -381,7 +394,7 @@ function openSheet(editId){
       if(!(qty>0)||!(pru>0)) return err("Indique une quantité et un prix de revient supérieurs à zéro.");
       const sym=$("fSym").value.trim()||(cls==="cry"?guessCoin(name):"");
       p={id:"p"+Date.now(),acc,name,cls,qty,pru,price,ccy:$("fCcy").value,sym,qccy:$("fQc").value};
-      if(ed && ed.price===price){ p.prev=ed.prev; p.priceAt=ed.priceAt; p.src=ed.src } else { p.priceAt=Date.now(); p.src="manuel" }
+      if(ed && Math.abs(ed.price-price)<1e-6){ p.prev=ed.prev; p.priceAt=ed.priceAt; p.src=ed.src; p.pruUsd=Math.abs(ed.pru-pru)<1e-6?ed.pruUsd:undefined; p.priceUsd=ed.priceUsd } else { p.priceAt=Date.now(); p.src="manuel"; if(ed && Math.abs(ed.pru-pru)<1e-6) p.pruUsd=ed.pruUsd }
     } else { const amt=+$("fAmt").value; if(!(amt>=0)||$("fAmt").value==="") return err("Indique le montant en euros."); p={id:"p"+Date.now(),acc,name,cls,qty:1,pru:amt,price:amt,ccy:"EUR"} }
     if(ed){ p.id=ed.id; state.positions[state.positions.indexOf(ed)]=p } else state.positions.push(p);
     if(ed && ed.sym!==p.sym) delete state.series[p.id];
@@ -716,6 +729,7 @@ async function refreshPrices(force){
   if(refreshing || !navigator.onLine) return;
   refreshing=true; lastErrors=[]; setPill();
   try{ await refreshFx(force) }catch(e){ lastErrors.push("Taux dollar/euro : "+e.message) }
+  applyFx();
   // Cryptos : CoinGecko sans clé, en une seule requête
   const cry=state.positions.filter(p=>p.cls==="cry"&&p.sym);
   if(cry.length && (force || Date.now()-state.lastCrypto>2*60000)){
@@ -850,7 +864,7 @@ function openSettings(){
     const blob=new Blob([JSON.stringify(state,null,1)],{type:"application/json"});
     const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`patrimoine-${new Date().toISOString().slice(0,10)}.json`; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove() },1000);
   };
-  $("sImport").onchange=e=>{ const f=e.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!Array.isArray(d.positions)) throw 0; localStorage.setItem(KEY,JSON.stringify(d)); state=load(); expenses=state.settings.expenses||2000; closeSheet(); render(); toast("Données restaurées") }catch(x){ $("sErr").textContent="Ce fichier n'est pas une sauvegarde de l'appli."; $("sErr").hidden=false } }; r.readAsText(f) };
+  $("sImport").onchange=e=>{ const f=e.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!Array.isArray(d.positions)) throw 0; localStorage.setItem(KEY,JSON.stringify(d)); state=load(); applyFx(); expenses=state.settings.expenses||2000; closeSheet(); render(); toast("Données restaurées"); refreshPrices(true) }catch(x){ $("sErr").textContent="Ce fichier n'est pas une sauvegarde de l'appli."; $("sErr").hidden=false } }; r.readAsText(f) };
   $("sWipe").onclick=()=>{ $("dangerZone").innerHTML=`<span class="actions"><span class="note">Effacer toutes tes données de ce téléphone ?</span><button class="btn small danger" type="button" id="sWipeOk">Tout effacer</button></span>`;
     $("sWipeOk").onclick=()=>{ state=DEFAULT(); save(); closeSheet(); render(); toast("Données effacées") } };
   $("sform").addEventListener("submit",e=>{
@@ -859,7 +873,7 @@ function openSettings(){
     const fx=parseFloat($("sFx").value);
     if(fx>0 && fx!==s.fx){ s.fx=fx; s.fxManual=true; s.fxAt=Date.now() } else if(!$("sFx").value){ s.fxManual=false }
     if(s.provider!=="none" && !s.key){ $("sErr").textContent="Colle ta clé d'API, ou choisis « Aucune »."; $("sErr").hidden=false; return }
-    save(); closeSheet(); render(); toast("Réglages enregistrés"); refreshPrices(true);
+    applyFx(); save(); closeSheet(); render(); toast("Réglages enregistrés"); refreshPrices(true);
   });
 }
 
