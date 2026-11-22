@@ -159,8 +159,30 @@ const RANGES = [
   {k:"6M", label:"6 M", days:182, name:"sur 6 mois"},
   {k:"1A", label:"1 A", days:365, name:"sur 1 an"}
 ];
+// Courbe passée estimée : quantités actuelles × cours de clôture passés (liquidités et lignes sans historique à valeur constante)
+function rebuiltHistory(){
+  const dated=state.positions.filter(p=>isMarket(p)&&state.series[p.id]&&Array.isArray(state.series[p.id].d)&&state.series[p.id].d.length===state.series[p.id].c.length);
+  if(!dated.length) return [];
+  const constPart=state.positions.filter(p=>!dated.includes(p)).reduce((s,p)=>s+val(p),0);
+  const dates=[...new Set(dated.flatMap(p=>state.series[p.id].d))].sort();
+  const idx=dated.map(()=>0), last=dated.map(p=>state.series[p.id].c[0]);
+  return dates.map(day=>{
+    let v=constPart;
+    dated.forEach((p,i)=>{ const S=state.series[p.id]; while(idx[i]<S.d.length&&S.d[idx[i]]<=day){ last[i]=S.c[idx[i]]; idx[i]++ } v+=num(p.qty)*last[i] });
+    return {t:Date.parse(day+"T17:35:00"), v, est:true};
+  });
+}
 function seriesFor(R){
-  const now=Date.now(), S=state.snaps;
+  const now=Date.now(), S=state.snaps, H=rebuiltHistory(), cur={t:now, v:totals().total};
+  const start=new Date(); start.setHours(0,0,0,0);
+  if(H.length){
+    if(R.k==="1J"){
+      const before=H.filter(h=>h.t<start.getTime()).pop();
+      const today=S.filter(s=>s.t>=start.getTime()&&Math.abs(s.v/cur.v-1)<.2); // écarte les relevés aberrants (avant un import, etc.)
+      return (before?[before]:[]).concat(today,[cur]).filter((x,i,a)=>i===0||x.t>a[i-1].t);
+    }
+    return H.filter(h=>h.t>=now-R.days*86400000&&h.t<start.getTime()).concat([cur]);
+  }
   if(R.k==="1J"){
     const start=new Date(); start.setHours(0,0,0,0);
     const before=S.filter(s=>s.t<start.getTime()).pop();
@@ -222,8 +244,9 @@ function renderGlobal(){
   const R=RANGES.find(x=>x.k===range);
   const S=seriesFor(R), series=S.map(s=>s.v);
   const enough=series.length>=2;
-  const first=state.snaps[0], histDays=first?(Date.now()-first.t)/86400000:0;
-  const shortHist = R.k!=="1J" && histDays < R.days-0.5;
+  const est=S.some(x=>x.est);
+  const first=S[0], histDays=first?(Date.now()-first.t)/86400000:0;
+  const shortHist = R.k!=="1J" && histDays < R.days-4;
   const chg=enough?series[series.length-1]-series[0]:0, chgPct=enough&&series[0]?chg/series[0]:0;
   const movers=state.positions.filter(p=>!isRobo(p)&&isMarket(p)&&p.prev&&sameDay(p.priceAt,Date.now())).map(p=>({p, d:p.qty*(p.price-p.prev), dp:(p.price-p.prev)/p.prev})).concat(roboBlocks().filter(b=>b.d!=null).map(b=>({p:{name:"Robot advisor",acc:b.a.id}, d:b.d, dp:b.dp}))).sort((a,b)=>Math.abs(b.d)-Math.abs(a.d)).slice(0,3);
   const instMax=Math.max(...Object.values(inst));
@@ -243,9 +266,9 @@ function renderGlobal(){
     <div class="seg" role="group" aria-label="Période" style="display:flex;margin-bottom:10px">
       ${RANGES.map(x=>`<button style="flex:1" data-range="${x.k}" aria-pressed="${range===x.k}">${x.label}</button>`).join("")}
     </div>
-    ${enough && shortHist ? `<p class="note" style="margin:0 0 8px">Ton historique commence le ${fmtDate(first.t)} à ${fmtTime(first.t)}. Pour l'instant, cette période montre donc la même chose que les périodes plus courtes. Elle se remplira jour après jour.</p>`:""}
-    ${enough ? lineChart(series, R.k==="1J"?fmtTime(S[0].t):fmtDate(S[0].t), "maintenant")
-      : `<p class="note" style="margin:0">L'historique se construit au fil du temps : l'appli note la valeur de ton patrimoine à chaque ouverture et à chaque actualisation des cours. Reviens plus tard pour voir la courbe ${R.name}.</p>`}
+    ${enough && shortHist ? `<p class="note" style="margin:0 0 8px">Ton historique commence le ${fmtDate(first.t)}. Pour l'instant, cette période montre donc la même chose que les périodes plus courtes.</p>`:""}
+    ${enough ? lineChart(series, R.k==="1J"?fmtTime(S[0].t):fmtDate(S[0].t), "maintenant") : `<p class="note" style="margin:0">L'historique se construit au fil du temps : l'appli note la valeur de ton patrimoine à chaque ouverture et à chaque actualisation des cours. Reviens plus tard pour voir la courbe ${R.name}.</p>`}
+    ${enough&&est?`<p class="note" style="margin:8px 0 0">Estimation : tes quantités actuelles multipliées par les cours passés. Elle ne tient pas compte de tes achats et ventes passés. Liquidités, cryptos et titres sans cours passé comptent à leur valeur d'aujourd'hui.</p>`:""}
   </section>
   <section class="panel">
     <h2>Répartition par classe d'actifs</h2>
@@ -285,7 +308,6 @@ function renderPositions(){
   const ps=state.positions.filter(p=>!isRobo(p)).sort((a,b)=>val(b)-val(a));
   const rbs=roboBlocks();
   return `
-  <div class="actions"><button class="btn" data-act="add">Ajouter une position</button><button class="btn ghost" data-act="import">Importer un fichier</button></div>
   <section class="panel"><h2>Toutes les lignes</h2><div class="list">${rbs.map(b=>roboLine(b,`<br>Plus-value latente <span class="num ${cl(b.gain)}">${money(b.gain)} (${pct(b.gainPct)})</span>`)).join("")}${ps.map(p=>{
     const a=accById(p.acc); const g=isMarket(p)?p.qty*(p.price-p.pru):0; const gp=isMarket(p)&&p.pru?(p.price-p.pru)/p.pru:0;
     const del = confirmDel===p.id
@@ -296,6 +318,7 @@ function renderPositions(){
       <span class="r num ${cl(g)}">${isMarket(p)?`${money(g)} (${pct(gp)})`:""}</span>
       <span style="grid-column:1/-1;margin-top:6px">${del}</span></div>`;
   }).join("")}</div></section>
+  <div class="actions"><button class="btn" data-act="add">Ajouter une position</button><button class="btn ghost" data-act="import">Importer un fichier</button></div>
   <p class="note">Tes données restent sur cet appareil. Pense à les sauvegarder de temps en temps depuis les réglages (roue dentée en haut).</p>`;
 }
 
@@ -794,8 +817,10 @@ async function refreshPrices(force){
         const q=(p.isin&&j.titres[p.isin])||(p.sym&&j.titres[p.sym]); if(!q||!(q.price>0)) return;
         const k=q.currency==="EUR"?1:q.currency==="USD"?(state.settings.fx||fxC):(j.fx&&j.fx[q.currency+"EUR"]); if(!k) return;
         p.price=q.price*k; p.prev=q.prev?q.prev*k:null; p.priceAt=at; p.src="auto";
-        if(Array.isArray(q.closes)&&q.closes.length) state.series[p.id]={c:q.closes.map(x=>x[1]*k), at};
+        if(Array.isArray(q.closes)&&q.closes.length) state.series[p.id]={c:q.closes.map(x=>x[1]*k), d:q.closes.map(x=>x[0]), at};
       });
+      state.market={};
+      MARKETS.forEach(m=>{ const q=j.titres[m.code]; if(q&&q.price>0&&Array.isArray(q.closes)) state.market[m.code]={price:q.price, c:q.closes.map(x=>x[1]), at} });
     }
   }catch(e){ /* pas de fichier de cours : on continue avec les autres sources */ }
   applyFx();
@@ -868,6 +893,61 @@ function signals(p, total){
   return out;
 }
 const fp = v => v==null ? "–" : pct(v);
+const MARKETS=[
+  {code:"^GSPC", name:"S&P 500", zone:"us"}, {code:"^IXIC", name:"Nasdaq", zone:"us"},
+  {code:"^FCHI", name:"CAC 40", zone:"eu"}, {code:"^STOXX50E", name:"Euro Stoxx 50", zone:"eu"},
+  {code:"URTH", name:"MSCI World", zone:"world"}
+];
+function trendOf(c){
+  if(!c||c.length<60) return null;
+  const last=c[c.length-1], sma=n=>c.length>=n?c.slice(-n).reduce((s,v)=>s+v,0)/n:null;
+  const m50=sma(50), m200=sma(200);
+  let g=0,l=0; for(let i=c.length-14;i<c.length;i++){ const d=c[i]-c[i-1]; if(d>0) g+=d; else l-=d }
+  const rsi=l===0?100:100-100/(1+g/l), dd=last/Math.max(...c)-1;
+  const dir = m200 ? (last>m50&&m50>m200?1:last<m50&&m50<m200?-1:0) : (last>m50?1:-1);
+  return {last, m50, m200, rsi, dd, dir, p1m:c.length>21?last/c[c.length-22]-1:null, p3m:c.length>63?last/c[c.length-64]-1:null};
+}
+const BOND_RE=/bond|govies|gilt|treasury|corporate|obligat|aggregate|high yield|\bdebt\b|govt/i;
+const US_RE=/s&p|nasdaq|\bus\b|usa|america|u\.s\./i;
+function generalAdvice(){
+  const t=totals(), tot=t.total||1;
+  const mk=state.positions.filter(isMarket);
+  const mkV=mk.reduce((s,p)=>s+val(p),0)||1;
+  const bonds=mk.filter(p=>p.cls==="etf"&&BOND_RE.test(p.name)).reduce((s,p)=>s+val(p),0);
+  const cry=mk.filter(p=>p.cls==="cry").reduce((s,p)=>s+val(p),0);
+  const eq=mkV-bonds-cry;
+  const us=mk.filter(p=>p.cls!=="cry"&&!BOND_RE.test(p.name)&&(p.qccy==="USD"||(p.isin||"").startsWith("US")||US_RE.test(p.name))).reduce((s,p)=>s+val(p),0);
+  const usd=mk.filter(p=>p.qccy==="USD"||/usd/i.test(p.name)&&!/hedged|couvert/i.test(p.name)).reduce((s,p)=>s+val(p),0);
+  const withT=mk.filter(p=>p.cls!=="cry").map(p=>({p, s:state.series[p.id]&&trendOf(state.series[p.id].c)})).filter(x=>x.s);
+  const below=withT.filter(x=>x.s.m200&&x.s.last<x.s.m200).reduce((s,x)=>s+val(x.p),0), cov=withT.reduce((s,x)=>s+val(x.p),0);
+  const own=withT.filter(x=>!isRobo(x.p)), oversold=own.filter(x=>x.s.rsi<30).map(x=>x.p.name), overbought=own.filter(x=>x.s.rsi>70).map(x=>x.p.name);
+  const idx=MARKETS.map(m=>({...m, s:state.market&&state.market[m.code]&&trendOf(state.market[m.code].c)})).filter(m=>m.s);
+  const word=d=>d>0?"haussière":d<0?"baissière":"sans direction nette";
+  const pts=[];
+  if(idx.length){
+    const up=idx.filter(m=>m.s.dir>0).length, down=idx.filter(m=>m.s.dir<0).length;
+    pts.push(up>=idx.length-1&&up>down?"Les grands indices sont en tendance haussière : cours au-dessus de leurs moyennes à 50 et 200 jours."
+      : down>=idx.length-1&&down>up?"Les grands indices sont en tendance baissière : cours sous leurs moyennes à 50 et 200 jours. Prudence sur les achats au fil de l'eau."
+      : "Les marchés envoient des signaux mitigés : certains indices montent, d'autres hésitent ou reculent.");
+    const usM=idx.filter(m=>m.zone==="us"), euM=idx.filter(m=>m.zone==="eu");
+    if(usM.length&&euM.length){ const a=usM[0].s.p3m, b=euM[0].s.p3m; if(a!=null&&b!=null&&Math.abs(a-b)>.04) pts.push(`Sur 3 mois, ${a>b?"les États-Unis":"l'Europe"} font mieux (${usM[0].name} ${pct(a)}, ${euM[0].name} ${pct(b)}).`) }
+    const hot=idx.filter(m=>m.s.rsi>70).map(m=>m.name), cold=idx.filter(m=>m.s.rsi<30).map(m=>m.name), deep=idx.filter(m=>m.s.dd<-.1).map(m=>m.name);
+    if(hot.length) pts.push(`${hot.join(", ")} en zone de surachat (RSI au-dessus de 70) : la hausse récente a été rapide, un repli à court terme est fréquent dans ce cas.`);
+    if(cold.length) pts.push(`${cold.join(", ")} en zone de survente (RSI sous 30) : le marché a beaucoup baissé récemment.`);
+    if(deep.length) pts.push(`${deep.join(", ")} à plus de 10 % sous leur plus haut de l'année.`);
+  }
+  const mine=[];
+  if(us/mkV>.5) mine.push(`Environ ${pctF.format(us/mkV)} de tes placements sont des actions américaines. Ton portefeuille suit donc surtout la bourse américaine${idx.find(m=>m.zone==="us")?`, aujourd'hui en tendance ${word(idx.find(m=>m.zone==="us").s.dir)}`:""}.`);
+  if(cov&&below/cov>.4) mine.push(`${pctF.format(below/cov)} de tes lignes (en valeur) sont sous leur moyenne à 200 jours : une bonne partie de ton portefeuille est en tendance faible.`);
+  else if(cov) mine.push(`${pctF.format(1-below/cov)} de tes lignes (en valeur) sont au-dessus de leur moyenne à 200 jours.`);
+  if(bonds/mkV<.1) mine.push(`Les obligations pèsent ${pctF.format(bonds/mkV)} de tes placements : en cas de baisse des actions, peu de lignes amortiront le choc.`);
+  else mine.push(`Les obligations pèsent ${pctF.format(bonds/mkV)} de tes placements : elles amortissent en général une partie des baisses des actions.`);
+  if(cry/tot>.1) mine.push(`La crypto pèse ${pctF.format(cry/tot)} de ton patrimoine, au-dessus du repère de 10 %.`);
+  if(usd/mkV>.3) mine.push(`${pctF.format(usd/mkV)} de tes placements sont en dollars sans couverture : une baisse du dollar face à l'euro réduirait leur valeur, même si les titres ne bougent pas.`);
+  if(oversold.length) mine.push(`En survente (RSI sous 30) : ${oversold.slice(0,4).join(", ")}${oversold.length>4?"…":""}.`);
+  if(overbought.length) mine.push(`En surachat (RSI au-dessus de 70) : ${overbought.slice(0,4).join(", ")}${overbought.length>4?"…":""}.`);
+  return {idx, pts, mine, eqPct:eq/mkV};
+}
 function renderConseils(){
   const t=totals();
   const ps=state.positions.filter(p=>isMarket(p)&&!isRobo(p)).sort((a,b)=>val(b)-val(a));
@@ -875,7 +955,16 @@ function renderConseils(){
   if(!ps.length&&!rbs.length) return emptyState();
   const allSeries=ps.every(p=>state.series[p.id]);
   const canLoad=ps.some(p=>p.sym && (p.cls==="cry" || (state.settings.provider!=="none"&&state.settings.key)));
+  const G=generalAdvice();
   return `
+  <section class="panel">
+    <h2>Conseil général</h2>
+    ${G.idx.length?`<div class="sig" style="margin-bottom:10px">${G.idx.map(m=>`<div>${m.name}<b class="${cl(m.s.p1m)}">${fp(m.s.p1m)}</b><span class="note" style="font-size:11.5px">${m.s.dir>0?"haussier":m.s.dir<0?"baissier":"hésitant"}</span></div>`).join("")}</div>`
+      :`<p class="note" style="margin:0 0 8px">Les indices de marché arrivent avec la prochaine mise à jour des cours.</p>`}
+    ${G.pts.length?`<p style="margin:0 0 6px"><b>Marchés</b></p><ul class="ideas">${G.pts.map(x=>`<li>${x}</li>`).join("")}</ul>`:""}
+    <p style="margin:8px 0 6px"><b>Pour ton portefeuille</b></p><ul class="ideas">${G.mine.map(x=>`<li>${x}</li>`).join("")}</ul>
+    <p class="note" style="margin:6px 0 0">Variation sur 1 mois. Analyse calculée par l'appli à partir de règles simples (moyennes mobiles, RSI, répartition) : indicatif, pas un conseil en investissement.</p>
+  </section>
   ${allSeries?"":`<section class="panel">
     <h2>Cours passés des titres</h2>
     <p class="note" style="margin:0 0 10px">Tes relevés donnent tes achats et tes ventes, mais pas le cours de chaque titre jour après jour. Or la tendance, les moyennes et le RSI se calculent sur ces cours passés. L'appli doit donc les demander à une source de cours.</p>
