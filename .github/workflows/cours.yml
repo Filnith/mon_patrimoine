@@ -30,5 +30,8 @@ jobs:
           git add cours.json
           git diff --cached --quiet && exit 0
           git commit -m "Cours du jour"
-          git pull --rebase -X theirs origin main || true
-          git push
+          for i in 1 2 3; do
+            git pull --rebase -X theirs origin main && git push && exit 0
+            sleep 10
+          done
+          echo "::warning::cours.json non enregistré cette fois-ci"

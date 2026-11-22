@@ -89,6 +89,10 @@ def main():
             out["fx"][cur + "EUR"] = round(chart(base + "EUR=X")["price"] / div, 6)
         except Exception as e:
             out["errors"][cur + "EUR"] = str(e)
+    # Garde-fou : si la source répond mal (blocage, panne), on ne remplace pas le fichier existant
+    if len(out["titres"]) < len(codes) / 2 and os.path.exists("cours.json"):
+        print(f"Seulement {len(out['titres'])} titres sur {len(codes)} : cours.json conservé tel quel.")
+        return
     json.dump(out, open("cours.json", "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     print(f"{len(out['titres'])} titres OK, {len(out['errors'])} erreurs: {out['errors']}")
 
