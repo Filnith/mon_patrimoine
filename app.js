@@ -778,7 +778,7 @@ function setPill(){
 function signals(p, total){
   const c=(state.series[p.id]&&state.series[p.id].c||[]).slice();
   const w=val(p)/total, gain=(p.price-p.pru)/p.pru;
-  const out={w,gain,n:c.length,m50:null,m200:null,rsi:null,dd:null,perf1m:null,perf1a:null,trend:{t:"Historique à charger",c:"warn"},notes:[]};
+  const out={w,gain,n:c.length,m50:null,m200:null,rsi:null,dd:null,perf1m:null,perf1a:null,trend:null,notes:[]};
   if(c.length) c[c.length-1]=p.price;
   const sma=n=>c.length>=n?c.slice(-n).reduce((s,v)=>s+v,0)/n:null;
   if(c.length>=20){
@@ -811,13 +811,14 @@ function renderConseils(){
   const canLoad=ps.some(p=>p.sym && (p.cls==="cry" || (state.settings.provider!=="none"&&state.settings.key)));
   return `
   <section class="panel">
-    <h2>Historique des cours</h2>
-    <p class="note" style="margin:0 0 10px">Les signaux ont besoin de l'historique de chaque ligne. Le charger coûte une requête par action ou ETF (il t'en reste ${Math.max(0,callsLeft())} aujourd'hui).</p>
-    ${canLoad?`<button class="btn" data-act="load-hist">Charger l'historique</button>`:`<p class="note" style="margin:0">Ajoute un symbole à tes lignes et choisis une source de cours dans les réglages pour activer les signaux.</p>`}
+    <h2>Cours passés des titres</h2>
+    <p class="note" style="margin:0 0 10px">Tes relevés donnent tes achats et tes ventes, mais pas le cours de chaque titre jour après jour. Or la tendance, les moyennes et le RSI se calculent sur ces cours passés. L'appli doit donc les demander à une source de cours.</p>
+    ${canLoad?`<button class="btn" data-act="load-hist">Charger les cours passés</button><p class="note" style="margin:8px 0 0">Une requête par titre. Il t'en reste ${Math.max(0,callsLeft())} aujourd'hui.</p>`
+      :`<p class="note" style="margin:0">Pour les activer : crée une clé gratuite chez Alpha Vantage ou EODHD, colle-la dans les réglages (roue dentée), puis indique le symbole de chaque titre avec « Modifier ». En attendant, les conseils ci-dessous se basent sur tes plus-values et le poids de chaque ligne.</p>`}
   </section>
   <h2 style="margin:4px 0 -6px">Signaux par ligne</h2>
   ${ps.map(p=>{ const s=signals(p,t.total); return `<section class="panel">
-    <div class="row-head" style="margin-bottom:2px"><strong>${esc(p.name)}</strong><span class="tag ${s.trend.c}">${s.trend.t}</span></div>
+    <div class="row-head" style="margin-bottom:2px"><strong>${esc(p.name)}</strong>${s.trend?`<span class="tag ${s.trend.c}">${s.trend.t}</span>`:""}</div>
     <span class="note">${esc(accById(p.acc).inst)} · ${esc(accById(p.acc).env)} · ${pctF.format(s.w)} du patrimoine${state.series[p.id]?` · historique du ${fmtDate(state.series[p.id].at)}`:""}</span>
     ${s.n>=20?`<div class="sig">
       <div>1 mois<b class="${cl(s.perf1m)}">${fp(s.perf1m)}</b></div>
@@ -828,6 +829,7 @@ function renderConseils(){
       <div>Vs plus haut<b class="${cl(s.dd)}">${fp(s.dd)}</b></div>
     </div>`:""}
     ${s.notes.length?`<ul class="ideas">${s.notes.map(n=>`<li>${n}</li>`).join("")}</ul>`:""}
+    ${s.n<20?`<p class="note" style="margin:6px 0 0">Tendance et RSI indisponibles : il manque les cours passés de ce titre.</p>`:""}
   </section>`}).join("")}
   <p class="disclaimer">Les indicateurs techniques (moyennes mobiles, RSI) décrivent le passé et ne prédisent pas l'avenir. Ces orientations ne constituent pas un conseil en investissement.</p>`;
 }
