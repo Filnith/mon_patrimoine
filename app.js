@@ -57,15 +57,34 @@ function applyFx(){
   });
 }
 applyFx();
+
 function save(){ try { localStorage.setItem(KEY, JSON.stringify(state)) } catch(e){ toast("Impossible d'enregistrer sur cet appareil (stockage plein ou bloqué).") } }
 function loadExample(){
   state = Object.assign(DEFAULT(), {accounts:clone(EXAMPLE.accounts), positions:clone(EXAMPLE.positions), isExample:true, settings:state.settings});
   state.positions.forEach(p=>{ if(p.cls==="cry") p.sym=guessCoin(p.name); p.priceAt=Date.now(); p.src="exemple" });
   snapshot(); save();
 }
+// Une ligne sans ISIN dont le nom est une crypto connue (ex. « BTC », « Bitcoin ») est une crypto
+const looksCrypto = p => !p.isin && p.cls!=="liq" && !!guessCoin(p.name);
+// Range les cryptos dans un compte « Crypto » du même établissement
+function cryptoAccountFor(accId){
+  const a=state.accounts.find(x=>x.id===accId);
+  if(a && a.env==="Crypto") return a.id;
+  return findOrCreateAccount(a?a.inst:"Crypto","Crypto");
+}
+function fixCryptos(){
+  let n=0; const from=new Set();
+  state.positions.forEach(p=>{
+    if(p.cls!=="cry" && looksCrypto(p)){ p.cls="cry"; p.ccy="Crypto"; n++ }
+    if(p.cls==="cry"){ if(!p.sym) p.sym=guessCoin(p.name)||undefined; const to=cryptoAccountFor(p.acc); if(to!==p.acc){ from.add(p.acc); p.acc=to; n++ } }
+  });
+  // supprime les comptes vidés par le déplacement
+  if(from.size) state.accounts=state.accounts.filter(a=>!from.has(a.id)||state.positions.some(p=>p.acc===a.id));
+  return n;
+}
 function guessCoin(name){
   const n=String(name).toLowerCase();
-  const known={bitcoin:"bitcoin",btc:"bitcoin",ethereum:"ethereum",eth:"ethereum",solana:"solana",sol:"solana",cardano:"cardano",ada:"cardano",ripple:"ripple",xrp:"ripple",polkadot:"polkadot",dot:"polkadot",dogecoin:"dogecoin",doge:"dogecoin",litecoin:"litecoin",ltc:"litecoin",bnb:"binancecoin"};
+  const known={bitcoin:"bitcoin",btc:"bitcoin",ethereum:"ethereum",eth:"ethereum",solana:"solana",sol:"solana",cardano:"cardano",ada:"cardano",ripple:"ripple",xrp:"ripple",polkadot:"polkadot",dot:"polkadot",dogecoin:"dogecoin",doge:"dogecoin",litecoin:"litecoin",ltc:"litecoin",bnb:"binancecoin",avalanche:"avalanche-2",avax:"avalanche-2",chainlink:"chainlink",polygon:"matic-network",matic:"matic-network",tron:"tron",trx:"tron",stellar:"stellar",xlm:"stellar",shiba:"shiba-inu",shib:"shiba-inu",pepe:"pepe",usdc:"usd-coin",tether:"tether",usdt:"tether",uniswap:"uniswap",cosmos:"cosmos",atom:"cosmos",aptos:"aptos",sui:"sui",toncoin:"the-open-network",algorand:"algorand",algo:"algorand",tezos:"tezos",xtz:"tezos",aave:"aave",arbitrum:"arbitrum",arb:"arbitrum",optimism:"optimism",hbar:"hedera-hashgraph",hedera:"hedera-hashgraph"};
   for(const k in known) if(n===k || n.split(/\W+/).includes(k)) return known[k];
   return "";
 }
@@ -440,7 +459,7 @@ function parseCSV(text){
 }
 const IMPORT_FIELDS = {
   positions:[
-    {k:"name", label:"Nom du titre", req:true, re:/nom|libell|name|titre|instrument|produit|valeur|actif|asset/i},
+    {k:"name", label:"Nom du titre", req:true, re:/nom|libell|name|titre|instrument|produit|valeur|actif|asset|symbol|ticker|crypto|coin/i},
     {k:"isin", label:"ISIN (facultatif)", re:/isin|code/i},
     {k:"qty", label:"Quantité", req:true, re:/quantit|qty|nombre|shares|parts|nb/i},
     {k:"pru", label:"Prix de revient unitaire", req:true, re:/pru|revient|moyen|average|cost|achat/i},
@@ -449,7 +468,7 @@ const IMPORT_FIELDS = {
   transactions:[
     {k:"date", label:"Date (facultatif)", re:/date/i},
     {k:"type", label:"Type d'opération (facultatif)", re:/type|sens|op[ée]ration|transaction|action/i},
-    {k:"name", label:"Nom du titre", req:true, re:/nom|libell|name|titre|instrument|produit|valeur|actif|asset|description/i},
+    {k:"name", label:"Nom du titre", req:true, re:/nom|libell|name|titre|instrument|produit|valeur|actif|asset|symbol|ticker|crypto|coin|description/i},
     {k:"isin", label:"ISIN (facultatif)", re:/isin/i},
     {k:"qty", label:"Quantité", req:true, re:/quantit|qty|nombre|shares|parts|nb/i},
     {k:"price", label:"Prix unitaire", req:true, re:/prix|price|cours|unit/i},
@@ -489,7 +508,7 @@ function buildFromCSV(data, kind, map, cls, acc){
     });
     Object.values(groups).forEach(g=>{ if(g.qty>1e-9) out.push({name:g.name, isin:g.isin, qty:+g.qty.toFixed(8), pru:g.cost/g.qty, price:g.last}) });
   }
-  return {pos:out.map((p,i)=>({id:"p"+Date.now()+"_"+i, acc, name:p.name, isin:p.isin||undefined, cls, qty:p.qty, pru:+p.pru.toFixed(4), price:p.price, ccy:cls==="cry"?"Crypto":"EUR"})), skipped};
+  return {pos:out.map((p,i)=>{ const c=(cls==="cry"||looksCrypto(p))?"cry":cls; return {id:"p"+Date.now()+"_"+i, acc, name:p.name, isin:p.isin||undefined, cls:c, qty:p.qty, pru:+p.pru.toFixed(4), price:p.price, ccy:c==="cry"?"Crypto":"EUR"} }), skipped};
 }
 // Évite les comptes en double : même établissement et même type = même compte
 function findOrCreateAccount(inst, env){
@@ -649,9 +668,11 @@ function openImport(){
     if(acc==="__new"){ const inst=$("iInst").value.trim(); if(!inst) return err("Indique l'établissement du nouveau compte."); acc=findOrCreateAccount(inst,$("iEnv").value) }
     const r=buildFromCSV(data, kind, map, $("iCls").value, acc);
     if(!r.pos.length) return err("Aucune position trouvée avec ces colonnes.");
-    if($("iMode").value==="replace") state.positions=state.positions.filter(p=>!(p.acc===acc && isMarket(p)));
-    r.pos.forEach(p=>{ p.priceAt=Date.now(); p.src="fichier"; if(p.cls==="cry") p.sym=guessCoin(p.name) });
-    state.positions.push(...r.pos); snapshot(); save(); closeSheet(); render();
+    const cAcc=r.pos.some(p=>p.cls==="cry")?cryptoAccountFor(acc):null;
+    r.pos.forEach(p=>{ p.priceAt=Date.now(); p.src="fichier"; if(p.cls==="cry"){ p.acc=cAcc; p.sym=guessCoin(p.name)||undefined } });
+    const targets=new Set(r.pos.map(p=>p.acc));
+    if($("iMode").value==="replace") state.positions=state.positions.filter(p=>!(targets.has(p.acc) && isMarket(p)));
+    state.positions.push(...r.pos); fixCryptos(); snapshot(); save(); closeSheet(); render();
     toast(`${r.pos.length} position${r.pos.length>1?"s":""} importée${r.pos.length>1?"s":""}`);
   });
 }
@@ -887,7 +908,7 @@ function openSettings(){
     const blob=new Blob([JSON.stringify(state,null,1)],{type:"application/json"});
     const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`patrimoine-${new Date().toISOString().slice(0,10)}.json`; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove() },1000);
   };
-  $("sImport").onchange=e=>{ const f=e.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!Array.isArray(d.positions)) throw 0; localStorage.setItem(KEY,JSON.stringify(d)); state=load(); applyFx(); expenses=state.settings.expenses||2000; closeSheet(); render(); toast("Données restaurées"); refreshPrices(true) }catch(x){ $("sErr").textContent="Ce fichier n'est pas une sauvegarde de l'appli."; $("sErr").hidden=false } }; r.readAsText(f) };
+  $("sImport").onchange=e=>{ const f=e.target.files[0]; if(!f) return; const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!Array.isArray(d.positions)) throw 0; localStorage.setItem(KEY,JSON.stringify(d)); state=load(); applyFx(); fixCryptos(); expenses=state.settings.expenses||2000; closeSheet(); render(); toast("Données restaurées"); refreshPrices(true) }catch(x){ $("sErr").textContent="Ce fichier n'est pas une sauvegarde de l'appli."; $("sErr").hidden=false } }; r.readAsText(f) };
   $("sWipe").onclick=()=>{ $("dangerZone").innerHTML=`<span class="actions"><span class="note">Effacer toutes tes données de ce téléphone ?</span><button class="btn small danger" type="button" id="sWipeOk">Tout effacer</button></span>`;
     $("sWipeOk").onclick=()=>{ state=DEFAULT(); save(); closeSheet(); render(); toast("Données effacées") } };
   $("sform").addEventListener("submit",e=>{
@@ -941,7 +962,7 @@ window.addEventListener("offline",setPill);
 document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") refreshPrices(false) });
 setInterval(()=>{ if(document.visibilityState==="visible") refreshPrices(false) }, 5*60000);
 
-snapshot(); save(); render(); refreshPrices(false);
+fixCryptos(); snapshot(); save(); render(); refreshPrices(false);
 if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 
 })();
