@@ -375,7 +375,7 @@ function openSheet(editId){
     const err=msg=>{ $("fErr").textContent=msg; $("fErr").hidden=false };
     if(!name) return err("Indique un nom pour cette ligne.");
     let acc=$("fAcc").value;
-    if(acc==="__new"){ const inst=$("fInst").value.trim(); if(!inst) return err("Indique l'établissement du nouveau compte."); const env=$("fEnv").value; acc="a"+Date.now(); state.accounts.push({id:acc,inst,name:env,env}) }
+    if(acc==="__new"){ const inst=$("fInst").value.trim(); if(!inst) return err("Indique l'établissement du nouveau compte."); acc=findOrCreateAccount(inst,$("fEnv").value) }
     let p;
     if(m){ const qty=+$("fQty").value, pru=+$("fPru").value, price=+$("fPrice").value||pru;
       if(!(qty>0)||!(pru>0)) return err("Indique une quantité et un prix de revient supérieurs à zéro.");
@@ -473,6 +473,12 @@ function buildFromCSV(data, kind, map, cls, acc){
   }
   return {pos:out.map((p,i)=>({id:"p"+Date.now()+"_"+i, acc, name:p.name, isin:p.isin||undefined, cls, qty:p.qty, pru:+p.pru.toFixed(4), price:p.price, ccy:cls==="cry"?"Crypto":"EUR"})), skipped};
 }
+// Évite les comptes en double : même établissement et même type = même compte
+function findOrCreateAccount(inst, env){
+  const ex=state.accounts.find(a=>a.inst.trim().toLowerCase()===inst.trim().toLowerCase() && a.env===env);
+  if(ex) return ex.id;
+  const id="a"+Date.now(); state.accounts.push({id,inst:inst.trim(),name:env,env}); return id;
+}
 // ---------- Lecture des relevés PDF ----------
 const PDFJS="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
 function loadPdfLib(){
@@ -508,7 +514,7 @@ function parseRevolutBalances(lines){
   const end=txt.indexOf("Total",start);
   if(end<0) return null;
   let block=txt.slice(start,end).replace(/Résumé du solde|Produit|Solde d'ouverture|Argent sortant|Argent entrant|Solde de|clôture|Lieu d[’']émission de vos transactions/g," ").replace(/\s+/g," ");
-  const AMT="(-?\\d[\\d \\u00a0\\u202f]*,\\d{2}) ?€";
+  const AMT="(-?(?:\\d{1,3}(?: \\d{3})+|\\d+),\\d{2}) ?€";
   const re=new RegExp("([A-Za-zÀ-ÿ()'’ -]+?)\\s+"+AMT+"\\s+"+AMT+"\\s+"+AMT+"\\s+"+AMT,"g");
   const out=[]; let m;
   while((m=re.exec(block))) out.push({name:m[1].trim(), balance:parseNum(m[5])});
@@ -582,7 +588,10 @@ function openImport(){
     if(/\.pdf$/i.test(f.name) || f.type==="application/pdf"){
       $("iPrev").innerHTML=`<p class="note">Lecture du PDF…</p>`;
       readPdfRows(f).then(d=>{
-        if(d.revolut){ cash=d.revolut; data=null; $("iMap").innerHTML=""; drawCash(); return }
+        if(d.revolut){ cash=d.revolut; data=null; $("iMap").innerHTML="";
+          const ex=state.accounts.find(a=>/revolut/i.test(a.inst));
+          if(ex){ $("iAcc").value=ex.id; $("iNew").hidden=true } else { $("iAcc").value="__new"; $("iNew").hidden=false; $("iInst").value="Revolut" }
+          $("iMode").value="replace"; drawCash(); return }
         cash=null;
         if(!d.rows.length) throw new Error("vide");
         data=d; kind="positions"; $("iKind").value="positions";
@@ -610,7 +619,7 @@ function openImport(){
     e.preventDefault();
     if(cash){
       let acc=$("iAcc").value;
-      if(acc==="__new"){ const inst=$("iInst").value.trim()||"Revolut"; acc="a"+Date.now(); state.accounts.push({id:acc,inst,name:"Compte",env:"Compte"}) }
+      if(acc==="__new"){ const inst=$("iInst").value.trim()||"Revolut"; acc=findOrCreateAccount(inst,"Compte") }
       if($("iMode").value==="replace") state.positions=state.positions.filter(p=>!(p.acc===acc && !isMarket(p)));
       cash.products.filter(p=>p.balance!==0).forEach((p,i)=>state.positions.push({id:"p"+Date.now()+"_"+i, acc, name:p.name, cls:"liq", qty:1, pru:p.balance, price:p.balance, ccy:"EUR", priceAt:Date.now(), src:"fichier"}));
       snapshot(); save(); closeSheet(); render(); toast("Soldes Revolut importés"); return;
@@ -619,7 +628,7 @@ function openImport(){
     const missing=IMPORT_FIELDS[kind].filter(f=>f.req && map[f.k]<0).map(f=>f.label);
     if(missing.length) return err("Indique la colonne pour : "+missing.join(", ")+".");
     let acc=$("iAcc").value;
-    if(acc==="__new"){ const inst=$("iInst").value.trim(); if(!inst) return err("Indique l'établissement du nouveau compte."); const env=$("iEnv").value; acc="a"+Date.now(); state.accounts.push({id:acc,inst,name:env,env}) }
+    if(acc==="__new"){ const inst=$("iInst").value.trim(); if(!inst) return err("Indique l'établissement du nouveau compte."); acc=findOrCreateAccount(inst,$("iEnv").value) }
     const r=buildFromCSV(data, kind, map, $("iCls").value, acc);
     if(!r.pos.length) return err("Aucune position trouvée avec ces colonnes.");
     if($("iMode").value==="replace") state.positions=state.positions.filter(p=>!(p.acc===acc && isMarket(p)));
