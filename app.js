@@ -178,6 +178,8 @@ function renderGlobal(){
   const R=RANGES.find(x=>x.k===range);
   const S=seriesFor(R), series=S.map(s=>s.v);
   const enough=series.length>=2;
+  const first=state.snaps[0], histDays=first?(Date.now()-first.t)/86400000:0;
+  const shortHist = R.k!=="1J" && histDays < R.days-0.5;
   const chg=enough?series[series.length-1]-series[0]:0, chgPct=enough&&series[0]?chg/series[0]:0;
   const movers=state.positions.filter(p=>isMarket(p)&&p.prev&&sameDay(p.priceAt,Date.now())).map(p=>({p, d:p.qty*(p.price-p.prev), dp:(p.price-p.prev)/p.prev})).sort((a,b)=>Math.abs(b.d)-Math.abs(a.d)).slice(0,3);
   const instMax=Math.max(...Object.values(inst));
@@ -193,10 +195,11 @@ function renderGlobal(){
     </div>
   </section>
   <section class="panel">
-    <div class="row-head"><h2>Évolution</h2>${enough?`<span class="num ${cl(chg)}" style="font-size:13.5px">${money(chg)} (${pct(chgPct)}) ${R.name}</span>`:""}</div>
+    <div class="row-head"><h2>Évolution</h2>${enough?`<span class="num ${cl(chg)}" style="font-size:13.5px">${money(chg)} (${pct(chgPct)}) ${shortHist?"depuis le "+fmtDate(first.t):R.name}</span>`:""}</div>
     <div class="seg" role="group" aria-label="Période" style="display:flex;margin-bottom:10px">
       ${RANGES.map(x=>`<button style="flex:1" data-range="${x.k}" aria-pressed="${range===x.k}">${x.label}</button>`).join("")}
     </div>
+    ${enough && shortHist ? `<p class="note" style="margin:0 0 8px">Ton historique commence le ${fmtDate(first.t)} à ${fmtTime(first.t)}. Pour l'instant, cette période montre donc la même chose que les périodes plus courtes. Elle se remplira jour après jour.</p>`:""}
     ${enough ? lineChart(series, R.k==="1J"?fmtTime(S[0].t):fmtDate(S[0].t), "maintenant")
       : `<p class="note" style="margin:0">L'historique se construit au fil du temps : l'appli note la valeur de ton patrimoine à chaque ouverture et à chaque actualisation des cours. Reviens plus tard pour voir la courbe ${R.name}.</p>`}
   </section>
