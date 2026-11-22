@@ -951,20 +951,24 @@ function openSettings(){
     const st=L.status();
     if(st.on){
       $("lockZone").innerHTML=`<p class="note" style="margin:0">Activé : ${st.faceId?"Face ID, avec ton code en secours":"code à 4 chiffres"}. L'appli se reverrouille après 1 minute en arrière-plan.</p>
-        <div class="actions"><button class="btn small ghost" type="button" id="lOff">Désactiver</button></div>`;
+        <div class="actions">${st.faceId?`<button class="btn small ghost" type="button" id="lTest">Tester Face ID</button>`:""}<button class="btn small ghost" type="button" id="lOff">Désactiver</button></div><p class="note" id="lTestMsg" hidden></p>`;
+      if(st.faceId) $("lTest").onclick=async()=>{ const r=await L.test(); $("lTestMsg").hidden=false; $("lTestMsg").textContent=r.ok?"Face ID fonctionne.":"Échec : "+(r.error||"aucun message") };
       $("lOff").onclick=()=>{ L.disable(); drawLock(); toast("Verrouillage désactivé") };
     } else {
       const fid=await L.faceIdPossible();
       $("lockZone").innerHTML=`<label class="f" for="lPin">Choisis un code à 4 chiffres (secours si Face ID échoue)<input id="lPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off"></label>
         <div class="actions"><button class="btn small" type="button" id="lOn">${fid?"Activer Face ID":"Activer le code"}</button></div>
+        <p class="err" id="lMsg" hidden></p>
         <p class="note" style="margin:0">${fid?"Ton iPhone te proposera peut-être d'enregistrer une clé d'identification (passkey) pour ce site : accepte-la, c'est elle qui permet Face ID.":"Face ID n'est pas disponible dans ce navigateur : seul le code sera utilisé."}</p>`;
       $("lOn").onclick=async()=>{
         const pin=$("lPin").value.trim();
-        if(!/^\d{4}$/.test(pin)){ $("sErr").textContent="Le code doit faire 4 chiffres."; $("sErr").hidden=false; return }
-        $("sErr").hidden=true;
+        const msg=t=>{ $("lMsg").textContent=t; $("lMsg").hidden=!t };
+        if(!/^\d{4}$/.test(pin)){ msg("Entre d'abord un code de 4 chiffres dans le champ juste au-dessus."); $("lPin").focus(); return }
+        msg("");
         const r=await L.enable(pin, fid);
-        toast(r.faceId?"Face ID activé":(fid?"Face ID refusé : verrouillage par code activé":"Verrouillage par code activé"));
-        drawLock();
+        toast(r.faceId?"Face ID activé":(fid?"Face ID n'a pas pu être activé : verrouillage par code activé":"Verrouillage par code activé"));
+        await drawLock();
+        if(fid && !r.faceId) $("lockZone").insertAdjacentHTML("beforeend",`<p class="err">Face ID n'a pas pu être activé. Message de l'iPhone : ${esc(r.error||"aucun")}</p>`);
       };
     }
   };

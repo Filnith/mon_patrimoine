@@ -70,13 +70,25 @@ function reveal(){
   setTimeout(()=>{ el.hidden=true; document.body.classList.remove("intro-in") }, reduce?50:900);
 }
 
+let pending=null, lastErr="";
+const errText=e=>{
+  const n=e&&e.name||"", m=e&&e.message||String(e);
+  if(n==="NotAllowedError") return "Face ID annulé ou refusé ("+m+")";
+  if(n==="SecurityError") return "Le site n'est pas accepté pour Face ID ("+m+")";
+  if(n==="InvalidStateError") return "Une clé existe déjà pour ce site ("+m+")";
+  if(n==="NotSupportedError") return "Face ID n'est pas pris en charge ici ("+m+")";
+  return (n?n+" : ":"")+m;
+};
 async function tryFaceId(){
   const L=readLock(); if(!L.cred) return false;
+  if(pending) pending.abort(); // une seule demande à la fois, sinon iPhone refuse la suivante
+  const ac=new AbortController(); pending=ac;
   try{
-    await navigator.credentials.get({publicKey:{challenge:rnd(32), rpId:location.hostname, timeout:60000, userVerification:"required",
+    await navigator.credentials.get({signal:ac.signal, publicKey:{challenge:rnd(32), rpId:location.hostname, timeout:60000, userVerification:"required",
       allowCredentials:[{type:"public-key", id:unb64(L.cred), transports:["internal"]}]}});
     return true;
-  }catch(e){ return false }
+  }catch(e){ if(e&&e.name!=="AbortError") lastErr=errText(e); return false }
+  finally{ if(pending===ac) pending=null }
 }
 
 function showLock(){
@@ -102,12 +114,11 @@ function showLock(){
     sub.textContent="Déverrouille pour voir ton patrimoine";
     box.innerHTML=`<button class="fid" id="fidBtn"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M9 9v1M15 9v1M12 9v4h-1M9 16c1.5 1 4.5 1 6 0"/></svg>Face ID</button>
       <button class="link" id="pinBtn">Utiliser mon code</button>`;
-    document.getElementById("fidBtn").onclick=async()=>{ if(await tryFaceId()) reveal(); else sub.textContent="Face ID n'a pas abouti. Réessaie ou utilise ton code." };
+    document.getElementById("fidBtn").onclick=async()=>{ if(await tryFaceId()) reveal(); else sub.textContent="Face ID n'a pas abouti"+(lastErr?" : "+lastErr:"")+". Réessaie ou utilise ton code." };
     document.getElementById("pinBtn").onclick=pinView;
   };
   L.cred ? faceView() : pinView();
   requestAnimationFrame(()=>box.classList.add("show"));
-  if(L.cred) tryFaceId().then(ok=>{ if(ok) reveal() }); // essai automatique ; si le téléphone exige un geste, le bouton reste là
 }
 
 function start(){
@@ -134,20 +145,23 @@ window.PatriLock={
   async faceIdPossible(){ try{ return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()) }catch(e){ return false } },
   // À appeler directement depuis un appui sur un bouton (iPhone l'exige pour Face ID)
   async enable(pin, withFaceId){
-    let cred=null;
+    let cred=null, error="";
     if(withFaceId){
+      if(pending) pending.abort();
       try{
         const c=await navigator.credentials.create({publicKey:{challenge:rnd(32), rp:{name:"Mon Patrimoine", id:location.hostname},
           user:{id:rnd(16), name:"Mon Patrimoine", displayName:"Mon Patrimoine"},
           pubKeyCredParams:[{type:"public-key",alg:-7},{type:"public-key",alg:-257}],
           authenticatorSelection:{authenticatorAttachment:"platform", userVerification:"required", residentKey:"discouraged"}, timeout:60000}});
         cred=b64(c.rawId);
-      }catch(e){ cred=null }
+      }catch(e){ cred=null; error=errText(e) }
     }
     const salt=b64(rnd(16));
     writeLock({pin:await hash(pin,salt), salt, cred});
-    return {faceId:!!cred};
+    return {faceId:!!cred, error};
   },
+  // Essai de Face ID depuis les réglages, pour vérifier que ça marche
+  async test(){ const ok=await tryFaceId(); return {ok, error:ok?"":lastErr} },
   disable(){ try{ localStorage.removeItem(LKEY) }catch(e){} }
 };
 })();
