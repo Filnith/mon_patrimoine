@@ -473,12 +473,55 @@ function buildFromCSV(data, kind, map, cls, acc){
   }
   return {pos:out.map((p,i)=>({id:"p"+Date.now()+"_"+i, acc, name:p.name, isin:p.isin||undefined, cls, qty:p.qty, pru:+p.pru.toFixed(4), price:p.price, ccy:cls==="cry"?"Crypto":"EUR"})), skipped};
 }
+// ---------- Lecture des relevés PDF ----------
+const PDFJS="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+function loadPdfLib(){
+  if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  return new Promise((ok,ko)=>{ const sc=document.createElement("script"); sc.src=PDFJS+"pdf.min.js";
+    sc.onload=()=>{ window.pdfjsLib.GlobalWorkerOptions.workerSrc=PDFJS+"pdf.worker.min.js"; ok(window.pdfjsLib) };
+    sc.onerror=()=>ko(new Error("lib")); document.head.appendChild(sc) });
+}
+async function pdfLines(file){
+  const lib=await loadPdfLib();
+  const doc=await lib.getDocument({data:new Uint8Array(await file.arrayBuffer())}).promise;
+  const lines=[];
+  for(let n=1;n<=doc.numPages;n++){
+    const tc=await (await doc.getPage(n)).getTextContent();
+    const rows=[];
+    tc.items.forEach(it=>{ if(!it.str.trim()) return; const y=it.transform[5], x=it.transform[4];
+      let r=rows.find(r=>Math.abs(r.y-y)<3); if(!r){ r={y,items:[]}; rows.push(r) } r.items.push({x,s:it.str.trim()}) });
+    rows.sort((a,b)=>b.y-a.y).forEach(r=>lines.push(r.items.sort((a,b)=>a.x-b.x).map(i=>i.s).join("  ")));
+  }
+  return lines;
+}
+const ISIN_RE=/\b([A-Z]{2}[A-Z0-9]{9}\d)\b/;
+const NUM_RE=/[-−]?\d{1,3}(?:[ \u00a0\u202f.]\d{3})+(?:,\d+)?|[-−]?\d{1,3}(?:,\d{3})+(?:\.\d+)?|[-−]?\d+(?:[.,]\d+)?/g;
+function lineNumbers(t){
+  t=t.replace(ISIN_RE," ").replace(/\b\d{1,2}[\/.]\d{1,2}[\/.]\d{2,4}\b/g," ").replace(/\b\d{4}-\d{2}-\d{2}\b/g," ");
+  return (t.match(NUM_RE)||[]).map(x=>x.replace("−","-"));
+}
+async function readPdfRows(file){
+  const lines=await pdfLines(file), rows=[];
+  for(let i=0;i<lines.length;i++){
+    const m=lines[i].match(ISIN_RE); if(!m) continue;
+    // la ligne de l'ISIN, plus les lignes suivantes jusqu'au prochain ISIN (au plus 2), car certains relevés coupent une position sur plusieurs lignes
+    let block=[lines[i]];
+    for(let j=i+1;j<Math.min(lines.length,i+3);j++){ if(ISIN_RE.test(lines[j])) break; block.push(lines[j]) }
+    let nums=lineNumbers(block.join("  "));
+    let name=lines[i].replace(ISIN_RE,"").replace(NUM_RE,"").replace(/[|:;]+/g," ").replace(/\s+/g," ").trim();
+    if(name.length<3 && i>0 && !ISIN_RE.test(lines[i-1])) name=lines[i-1].replace(NUM_RE,"").replace(/\s+/g," ").trim();
+    rows.push([name||m[1], m[1], ...nums]);
+  }
+  const width=Math.max(2,...rows.map(r=>r.length));
+  const header=["Nom","ISIN",...Array.from({length:width-2},(_,k)=>"Nombre "+(k+1))];
+  return {header, rows:rows.map(r=>r.concat(Array(width-r.length).fill("")))};
+}
 function openImport(){
   let data=null, kind="transactions", map={};
   sheetRoot.innerHTML=`<div class="sheet-bg" id="sbg"><form class="sheet" id="iform" novalidate>
-    <h3>Importer un fichier CSV</h3>
+    <h3>Importer un fichier (CSV ou PDF)</h3>
     <p class="note" style="margin:0">Le fichier est lu dans ton navigateur. Il n'est envoyé nulle part.</p>
-    <label class="f" for="iFile">Fichier CSV<input id="iFile" type="file" accept=".csv,.txt,text/csv"></label>
+    <label class="f" for="iFile">Fichier CSV ou relevé PDF<input id="iFile" type="file" accept=".csv,.txt,text/csv,.pdf,application/pdf"></label>
     <label class="f" for="iKind">Contenu du fichier<select id="iKind">
       <option value="transactions">Historique d'achats et de ventes (ex. export Trade Republic)</option>
       <option value="positions">Liste de positions (une ligne par titre)</option></select></label>
@@ -513,6 +556,20 @@ function openImport(){
   const refresh=()=>{ drawMap(); drawPreview() };
   $("iFile").addEventListener("change",e=>{
     const f=e.target.files[0]; if(!f) return; err("");
+    if(/\.pdf$/i.test(f.name) || f.type==="application/pdf"){
+      $("iPrev").innerHTML=`<p class="note">Lecture du PDF…</p>`;
+      readPdfRows(f).then(d=>{
+        if(!d.rows.length) throw new Error("vide");
+        data=d; kind="positions"; $("iKind").value="positions";
+        map={name:0, isin:1, qty:d.header.length>2?2:-1, pru:d.header.length>3?3:-1, price:d.header.length>4?4:-1};
+        refresh();
+        $("iMap").insertAdjacentHTML("afterbegin",`<p class="note" style="margin:0 0 8px">PDF lu : ${d.rows.length} ligne${d.rows.length>1?"s":""} avec un code ISIN. Les nombres sont numérotés dans leur ordre d'apparition sur la ligne. Choisis lequel est la quantité, le prix de revient et le cours, en t'aidant des exemples.</p>`);
+      }).catch(x=>{ data=null; refresh(); err(x.message==="vide"
+        ? "Je n'ai trouvé aucune ligne avec un code ISIN dans ce PDF. Si c'est un relevé scanné (une image), il ne contient pas de texte lisible."
+        : x.message==="lib" ? "Impossible de charger le lecteur de PDF. Vérifie ta connexion et réessaie."
+        : "Je n'arrive pas à lire ce PDF.") });
+      return;
+    }
     const rd=new FileReader();
     rd.onload=()=>{ let txt=rd.result;
       if(txt.includes(String.fromCharCode(0xFFFD))){ const r2=new FileReader(); r2.onload=()=>go(r2.result); r2.readAsText(f,"windows-1252") } else go(txt) };
