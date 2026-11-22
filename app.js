@@ -765,7 +765,7 @@ async function refreshPrices(force){
       const at=Date.parse(j.updated)||Date.now();
       state.positions.forEach(p=>{
         const q=(p.isin&&j.titres[p.isin])||(p.sym&&j.titres[p.sym]); if(!q||!(q.price>0)) return;
-        const k=q.currency==="EUR"?1:q.currency==="USD"?(state.settings.fx||fxC):null; if(!k) return;
+        const k=q.currency==="EUR"?1:q.currency==="USD"?(state.settings.fx||fxC):(j.fx&&j.fx[q.currency+"EUR"]); if(!k) return;
         p.price=q.price*k; p.prev=q.prev?q.prev*k:null; p.priceAt=at; p.src="auto";
         if(Array.isArray(q.closes)&&q.closes.length) state.series[p.id]={c:q.closes.map(x=>x[1]*k), at};
       });

@@ -14,14 +14,15 @@ def get(url):
 def resolve(code):
     """ISIN -> symbole Yahoo coté en EUR ou USD. Un code qui n'est pas un ISIN est pris tel quel."""
     if len(code) != 12 or not code[:2].isalpha():
-        return code
+        return [code]
     q = get("https://query2.finance.yahoo.com/v1/finance/search?" + urllib.parse.urlencode({"q": code, "quotesCount": 10, "newsCount": 0}))
     syms = [x["symbol"] for x in q.get("quotes", []) if x.get("symbol")]
+    out = []
     for suf in PREF:
         for s in syms:
-            if (suf and s.endswith(suf)) or (not suf and "." not in s):
-                return s
-    return syms[0] if syms else None
+            if s not in out and ((suf and s.endswith(suf)) or (not suf and "." not in s)):
+                out.append(s)
+    return out + [s for s in syms if s not in out]
 
 def chart(sym):
     j = get(f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(sym)}?range=1y&interval=1d")
@@ -42,13 +43,30 @@ def main():
         out["errors"]["USDEUR"] = str(e)
     for c in codes:
         try:
-            sym = resolve(c)
-            if not sym:
+            cands = resolve(c)
+            if not cands:
                 raise ValueError("symbole introuvable")
-            out["titres"][c] = chart(sym)
+            last = None
+            for sym in cands[:4]:  # essaie les cotations suivantes si la première n'a pas de cours
+                try:
+                    q = chart(sym)
+                    if q["price"] and q["closes"]:
+                        out["titres"][c] = q
+                        break
+                except Exception as e:
+                    last = e
+            else:
+                raise ValueError(f"aucun cours ({last})")
         except Exception as e:
             out["errors"][c] = str(e)
         time.sleep(1)
+    # taux vers l'euro pour les autres devises rencontrées (CHF, GBP...)
+    for cur in sorted({q["currency"] for q in out["titres"].values()} - {"EUR", "USD", None}):
+        base, div = (cur.upper(), 100) if cur in ("GBp", "GBX") else (cur, 1)
+        try:
+            out["fx"][cur + "EUR"] = round(chart(base + "EUR=X")["price"] / div, 6)
+        except Exception as e:
+            out["errors"][cur + "EUR"] = str(e)
     json.dump(out, open("cours.json", "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     print(f"{len(out['titres'])} titres OK, {len(out['errors'])} erreurs: {out['errors']}")
 
