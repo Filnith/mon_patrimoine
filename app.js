@@ -950,8 +950,10 @@ function openSettings(){
     const L=window.PatriLock; if(!L){ $("lockZone").innerHTML=`<p class="note" style="margin:0">Indisponible.</p>`; return }
     const st=L.status();
     if(st.on){
-      $("lockZone").innerHTML=`<p class="note" style="margin:0">Activé : ${st.faceId?"Face ID, avec ton code en secours":"code à 4 chiffres"}. L'appli se reverrouille après 1 minute en arrière-plan.</p>
+      $("lockZone").innerHTML=`<p class="note" style="margin:0">Activé : ${st.faceId?"Face ID, avec ton code en secours":"code à 4 chiffres"}.</p>
+        <label class="f" for="lDelay">Redemander après un passage en arrière-plan de<select id="lDelay">${[[60000,"1 minute"],[900000,"15 minutes"],[3600000,"1 heure"],[-1,"jamais (seulement quand l'appli redémarre)"]].map(([v,t])=>`<option value="${v}" ${st.delay===v?"selected":""}>${t}</option>`).join("")}</select></label>
         <div class="actions">${st.faceId?`<button class="btn small ghost" type="button" id="lTest">Tester Face ID</button>`:""}<button class="btn small ghost" type="button" id="lOff">Désactiver</button></div><p class="note" id="lTestMsg" hidden></p>`;
+      $("lDelay").onchange=e=>{ L.setDelay(+e.target.value); toast("Délai enregistré") };
       if(st.faceId) $("lTest").onclick=async()=>{ const r=await L.test(); $("lTestMsg").hidden=false; $("lTestMsg").textContent=r.ok?"Face ID fonctionne.":"Échec : "+(r.error||"aucun message") };
       $("lOff").onclick=()=>{ L.disable(); drawLock(); toast("Verrouillage désactivé") };
     } else {

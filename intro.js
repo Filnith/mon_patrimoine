@@ -114,8 +114,10 @@ function showLock(){
     sub.textContent="Déverrouille pour voir ton patrimoine";
     box.innerHTML=`<button class="fid" id="fidBtn"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M9 9v1M15 9v1M12 9v4h-1M9 16c1.5 1 4.5 1 6 0"/></svg>Face ID</button>
       <button class="link" id="pinBtn">Utiliser mon code</button>`;
-    document.getElementById("fidBtn").onclick=async()=>{ if(await tryFaceId()) reveal(); else sub.textContent="Face ID n'a pas abouti"+(lastErr?" : "+lastErr:"")+". Réessaie ou utilise ton code." };
-    document.getElementById("pinBtn").onclick=pinView;
+    sub.textContent="Touche l'écran pour Face ID";
+    const go=async()=>{ if(await tryFaceId()) reveal(); else sub.textContent="Face ID n'a pas abouti"+(lastErr?" : "+lastErr:"")+". Touche l'écran pour réessayer, ou utilise ton code." };
+    document.getElementById("pinBtn").onclick=e=>{ e.stopPropagation(); el.onclick=null; pinView() };
+    el.onclick=e=>{ if(!unlocked && !e.target.closest("#pinBtn")) go() }; // un seul appui n'importe où sur l'écran
   };
   L.cred ? faceView() : pinView();
   requestAnimationFrame(()=>box.classList.add("show"));
@@ -133,7 +135,7 @@ let hiddenAt=0;
 document.addEventListener("visibilitychange",()=>{
   if(document.visibilityState==="hidden"){ hiddenAt=Date.now(); return }
   const L=readLock();
-  if(L.pin && unlocked && Date.now()-hiddenAt>60000){
+  if(L.pin && unlocked && L.delay!==-1 && Date.now()-hiddenAt>(L.delay||60000)){
     unlocked=false; el.hidden=false; el.classList.remove("out"); document.body.classList.add("intro-wait");
     document.getElementById("introLock").classList.remove("show"); showLock();
   }
@@ -141,7 +143,8 @@ document.addEventListener("visibilitychange",()=>{
 
 // API utilisée par les réglages
 window.PatriLock={
-  status(){ const L=readLock(); return {on:!!L.pin, faceId:!!L.cred} },
+  status(){ const L=readLock(); return {on:!!L.pin, faceId:!!L.cred, delay:L.delay||60000} },
+  setDelay(ms){ const L=readLock(); L.delay=ms; writeLock(L) },
   async faceIdPossible(){ try{ return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()) }catch(e){ return false } },
   // À appeler directement depuis un appui sur un bouton (iPhone l'exige pour Face ID)
   async enable(pin, withFaceId){
